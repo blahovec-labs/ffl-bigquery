@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+      - name: Install
+        run: uv sync --extra dev
+      # -m "not network" is load-bearing: FFC/MFL/nflverse must never be hit in
+      # CI. Those are third-party live services (FFC's terms ask callers not to
+      # poll frequently) and CI has no business calling them on every push.
+      - name: Test
+        run: uv run pytest -m "not network" -q --cov=ffl_bigquery
+      - name: Lint
+        run: uv run ruff check .
+      - name: Type check
+        run: uv run pyright ffl_bigquery

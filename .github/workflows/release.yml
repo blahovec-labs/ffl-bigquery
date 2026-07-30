@@ -1,0 +1,26 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv python install 3.13
+      - name: Install
+        run: uv sync --extra dev
+      # Same network exclusion as ci.yml: a release build must never depend on
+      # FFC/MFL/nflverse being reachable at publish time.
+      - name: Test
+        run: uv run pytest -m "not network" -q
+      - name: Build
+        run: uv run python -m build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
