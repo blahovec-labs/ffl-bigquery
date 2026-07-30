@@ -75,6 +75,16 @@ def test_ffc_leaves_mfl_only_columns_null():
         assert pd.isna(df.iloc[0][col]), f"{col} should be NULL for FFC"
 
 
+def test_ffc_transform_preserves_every_input_row():
+    df = transform_ffc(_ffc(), season=2015, scoring_format="ppr", teams=12,
+                       snapshot_date=SNAP)
+    assert len(df) == 2
+    row = df.iloc[1]
+    assert row["player_name"] == "Le'Veon Bell"
+    assert row["adp_earliest_pick"] == 1   # high
+    assert row["adp_latest_pick"] == 8     # low
+
+
 def test_mfl_casts_string_numerics_and_maps_min_max_picks():
     df = transform_mfl(_mfl(), season=2015, scoring_format="ppr", teams=12,
                        snapshot_date=SNAP)
@@ -88,6 +98,16 @@ def test_mfl_casts_string_numerics_and_maps_min_max_picks():
     assert row["draft_selected_pct"] == 66.0
     assert row["source_rank"] == 1
     assert row["total_drafts"] == 15877
+
+
+def test_mfl_transform_preserves_every_input_row():
+    df = transform_mfl(_mfl(), season=2015, scoring_format="ppr", teams=12,
+                       snapshot_date=SNAP)
+    assert len(df) == 2
+    row = df.iloc[1]
+    assert row["source_player_id"] == "9988"
+    assert row["adp_earliest_pick"] == 1     # minPick
+    assert row["adp_latest_pick"] == 439     # maxPick
 
 
 def test_mfl_leaves_ffc_only_columns_null():
@@ -108,6 +128,12 @@ def test_mfl_records_keeper_and_mock_slicers_when_supplied():
 
 def test_gsis_id_is_unresolved_at_transform_time():
     df = transform_ffc(_ffc(), season=2015, scoring_format="ppr", teams=12,
+                       snapshot_date=SNAP)
+    assert df["gsis_id"].isna().all()
+
+
+def test_mfl_gsis_id_is_unresolved_at_transform_time():
+    df = transform_mfl(_mfl(), season=2015, scoring_format="ppr", teams=12,
                        snapshot_date=SNAP)
     assert df["gsis_id"].isna().all()
 

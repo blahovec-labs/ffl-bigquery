@@ -52,6 +52,13 @@ def test_parses_player_list_and_totals():
     assert r.players[0]["averagePick"] == "9.11"
 
 
+def test_all_per_player_numerics_remain_strings():
+    r = fetch_mfl(_session(_fixture("mfl_adp_2015.json")), season=2015)
+    p = r.players[0]
+    for field in ("minPick", "maxPick", "rank", "draftSelPct", "draftsSelectedIn"):
+        assert isinstance(p[field], str), f"{field} was cast in mfl.py"
+
+
 def test_single_player_object_is_normalized_to_a_list():
     r = fetch_mfl(_session(_fixture("mfl_adp_single_player.json")), season=2026)
     assert isinstance(r.players, list)
