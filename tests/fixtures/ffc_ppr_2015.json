@@ -1,0 +1,39 @@
+{
+  "status": "Success",
+  "meta": {
+    "type": "PPR",
+    "teams": 12,
+    "rounds": 15,
+    "total_drafts": 844,
+    "start_date": "2015-09-06",
+    "end_date": "2015-09-09"
+  },
+  "players": [
+    {
+      "player_id": 925,
+      "name": "Adrian Peterson",
+      "position": "RB",
+      "team": "MIN",
+      "adp": 1.8,
+      "adp_formatted": "1.02",
+      "times_drafted": 329,
+      "high": 1,
+      "low": 5,
+      "stdev": 1.0,
+      "bye": 6
+    },
+    {
+      "player_id": 1049,
+      "name": "Le'Veon Bell",
+      "position": "RB",
+      "team": "PIT",
+      "adp": 2.4,
+      "adp_formatted": "1.02",
+      "times_drafted": 318,
+      "high": 1,
+      "low": 8,
+      "stdev": 1.4,
+      "bye": 11
+    }
+  ]
+}
