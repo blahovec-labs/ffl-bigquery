@@ -5,7 +5,7 @@ Free, no key, but the endpoint refuses requests without a real User-Agent.
 Three shapes matter, all observed 2026-07-29:
   * every numeric field is a STRING ("averagePick": "3.28") — casting is the
     transform's job, not this module's
-  * pre-2012 returns {"adp": {"totalPicks": "0", "totalDrafts": "0"}} with no
+  * pre-2011 returns {"adp": {"totalPicks": "0", "totalDrafts": "0"}} with no
     "player" key at all
   * MFL's JSON derives from XML, so a single-element list collapses to a bare
     object; "player" may be a dict

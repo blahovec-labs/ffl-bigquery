@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 from google.cloud import bigquery
+from google.cloud.exceptions import NotFound
 
 from ffl_bigquery.schema import spec_names
 from ffl_bigquery.xref.schema import FF_XREF_KEY, FF_XREF_SCHEMA, XREF_ID_COLUMNS
@@ -92,10 +93,11 @@ def test_sync_creates_table_then_merges_on_mfl_id():
     from ffl_bigquery.xref.sync import run_sync_xref
 
     bq = MagicMock(spec=bigquery.Client)
+    bq.get_table.side_effect = NotFound("nope")
     ns = MagicMock(xref_table="p.d.ff_player_xref", dry_run=False)
     loader = MagicMock(return_value=pd.read_csv(FIXTURES / "ff_playerids_sample.csv"))
     run_sync_xref(ns, bq_client=bq, load_playerids=loader)
-    assert bq.create_table.called or bq.get_table.called
+    assert bq.create_table.called
     merge_sql = [c[0][0] for c in bq.query.call_args_list if "MERGE" in str(c[0][0])]
     assert merge_sql and "ON t.mfl_id = s.mfl_id" in merge_sql[0]
 

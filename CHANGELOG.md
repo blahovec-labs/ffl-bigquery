@@ -16,7 +16,9 @@ Initial release: the fantasy layer on top of `nfl-bigquery`.
   which publishes an id present in no nflverse id system. Ambiguous name matches
   are refused rather than guessed.
 - `_ffl_ingest_runs` chunk-keyed run log powering `--resume`.
-- `verify` — resolution rate, grain uniqueness, snapshot idempotency.
+- `verify` — resolution rate, and grain uniqueness (which, since the grain includes
+  `snapshot_date`, also guarantees same-day MERGE idempotency — the same underlying
+  fact, reported as two checks for clearer failure messages).
 
 ### Known limitations
 - FFC ignores `start_date`/`end_date`, so intra-preseason ADP drift is

@@ -124,7 +124,11 @@ class RunsTable:
             "run_at": datetime.now(UTC).isoformat(),
             "library_version": __version__,
         }
-        errors = self.client.insert_rows_json(str(ref), [row])
+        try:
+            errors = self.client.insert_rows_json(str(ref), [row])
+        except Exception:
+            log.exception("runs insert failed")
+            return False
         if errors:
             log.error("runs insert errors: %s", errors)
             return False

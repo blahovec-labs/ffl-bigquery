@@ -13,7 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     sa = sub.add_parser("sync-adp", help="Fetch ADP snapshots and write to BigQuery")
-    # Defaults reflect measured coverage: FFC from 2010, MFL from 2012.
+    # Defaults reflect measured coverage: FFC from 2010, MFL from 2011.
     sa.add_argument("--seasons", default="2010-2026",
                     help="e.g. 2010-2026 | 2015,2020 | 2024 | latest")
     sa.add_argument("--sources", default="ffc,mfl")

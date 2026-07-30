@@ -1,8 +1,12 @@
 """ff_adp data-quality checks.
 
-Every check maps to a defect that would otherwise reach a chart: a silently
-degraded xref thinning joins, a duplicated grain double-counting a player, or a
-non-idempotent cron inflating a day's snapshot.
+Two independent guarantees: resolution rate (a silently degraded xref thinning
+joins) and grain uniqueness (a duplicated grain double-counting a player). Grain
+uniqueness is checked twice, as check_no_duplicates_at_grain and
+check_snapshot_idempotent -- since the grain already includes snapshot_date, "no
+grain key repeats" and "no day's MERGE appends instead of upserting" are the same
+underlying fact, run as separate queries only so a failure names which framing is
+clearer in the report.
 """
 from __future__ import annotations
 

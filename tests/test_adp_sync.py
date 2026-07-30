@@ -2,10 +2,12 @@ from datetime import date
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 from google.cloud import bigquery
 
-from ffl_bigquery.adp.sync import build_chunks, run_sync_adp
+from ffl_bigquery.adp.sync import _fetch_and_transform, build_chunks, run_sync_adp
 from ffl_bigquery.http import SourceUnavailable
+from ffl_bigquery.runs import AdpChunk, RunsTable
 
 XREF = pd.DataFrame({
     "mfl_id": [8658], "gsis_id": ["00-0025394"],
@@ -41,6 +43,33 @@ def test_build_chunks_is_the_cross_product_for_ffc():
                           formats=["ppr", "standard"], teams=[10, 12])
     assert len(chunks) == 8
     assert all(c.source == "ffc" for c in chunks)
+
+
+def test_unknown_source_in_sources_raises_before_any_request():
+    """--sources fcc (a typo for ffc) must fail fast, not silently fall through
+    to MyFantasyLeague and issue a live request it was never asked for.
+    """
+    sess = MagicMock()
+    with pytest.raises(ValueError, match="fcc"):
+        run_sync_adp(_ns(sources="fcc"), bq_client=MagicMock(spec=bigquery.Client),
+                     session=sess, load_xref=lambda _: XREF,
+                     today=date(2026, 7, 29), runs=MagicMock(), writer=MagicMock())
+    assert not sess.get_json.called
+
+
+def test_unknown_source_mixed_with_a_valid_one_still_raises():
+    sess = MagicMock()
+    with pytest.raises(ValueError, match="fcc"):
+        run_sync_adp(_ns(sources="ffc,fcc"), bq_client=MagicMock(spec=bigquery.Client),
+                     session=sess, load_xref=lambda _: XREF,
+                     today=date(2026, 7, 29), runs=MagicMock(), writer=MagicMock())
+    assert not sess.get_json.called
+
+
+def test_fetch_and_transform_raises_on_unknown_chunk_source():
+    chunk = AdpChunk(source="bogus", season=2026, scoring_format="ppr", teams=12)
+    with pytest.raises(ValueError, match="bogus"):
+        _fetch_and_transform(chunk, MagicMock(), date(2026, 7, 29))
 
 
 def test_build_chunks_restricts_mfl_to_ppr_and_standard():
@@ -202,3 +231,26 @@ def test_runlog_write_failure_is_not_counted_when_record_succeeds(caplog):
     assert not [r for r in caplog.records if r.levelname == "ERROR"]
     info_records = [r for r in caplog.records if r.levelname == "INFO"]
     assert any("0 run-log write failures" in r.getMessage() for r in info_records)
+
+
+def test_run_completes_all_chunks_when_every_runlog_insert_raises():
+    """A *raising* run-log insert (transport error, permission error, the
+    streaming-404 window right after the runs table is first created) must
+    degrade to a counted run-log failure, not abort the run. Uses a real
+    RunsTable (not a mock) so record_success/record_failed genuinely go
+    through _record and its insert_rows_json call.
+    """
+    bq = MagicMock(spec=bigquery.Client)
+    bq.insert_rows_json.side_effect = RuntimeError("boom")
+    sess = MagicMock()
+    sess.get_json.return_value = _ffc_payload([_PLAYER])
+    writer = MagicMock()
+    writer.merge_rows.return_value = 1
+    runs = RunsTable(client=bq)
+
+    rc = run_sync_adp(_ns(seasons="2014,2015,2016"), bq_client=bq, session=sess,
+                      load_xref=lambda _: XREF, today=date(2026, 7, 29),
+                      runs=runs, writer=writer)
+
+    assert rc == 0
+    assert writer.merge_rows.call_count == 3

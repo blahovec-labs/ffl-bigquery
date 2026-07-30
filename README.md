@@ -41,9 +41,14 @@ matches are refused rather than guessed, so `gsis_id` is left `NULL` — never w
 
 `sync-adp` fans a season/source/format/teams matrix out into independent chunks, so one
 dead upstream source degrades coverage instead of aborting the whole run; `--resume`
-skips chunks already recorded `success` or `empty` in the runs table. `verify` checks
-`gsis_id` resolution rate (floor `--min-resolution-rate`, default a conservative `0.60`
-— see Known limitations below), grain uniqueness, and same-day MERGE idempotency. Both
+skips chunks already recorded `success` or `empty` in the runs table. `--min-interval`
+(seconds, default `1.0`) throttles the delay between requests to FFC/MFL — the minimum
+respectful spacing backing the "do not poll frequently" terms both sources ask for; see
+Data sources & attribution below. `verify` checks two independent guarantees: `gsis_id`
+resolution rate (floor `--min-resolution-rate`, default a conservative `0.60` — see Known
+limitations below), and grain uniqueness — since the grain includes `snapshot_date`, a
+grain that is never duplicated is also, by construction, a same-day MERGE that never
+appends twice. Both
 `sync-adp` and `sync-xref` accept `--dry-run` to print what would happen without writing.
 
 ## Coverage windows

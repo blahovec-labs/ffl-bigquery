@@ -18,6 +18,7 @@ from ffl_bigquery.adp.ffc import fetch_ffc
 from ffl_bigquery.adp.mfl import fetch_mfl
 from ffl_bigquery.adp.resolve import resolution_rate, resolve_gsis_ids
 from ffl_bigquery.adp.schema import (
+    ADP_SOURCES,
     FF_ADP_KEYS,
     FF_ADP_PARTITION,
     FF_ADP_SCHEMA,
@@ -75,11 +76,13 @@ def _fetch_and_transform(
         return transform_ffc(resp, season=chunk.season,
                              scoring_format=chunk.scoring_format,
                              teams=chunk.teams, snapshot_date=snapshot_date)
-    resp = fetch_mfl(session, season=chunk.season, teams=chunk.teams,
-                     is_ppr=chunk.scoring_format == "ppr")
-    return transform_mfl(resp, season=chunk.season,
-                         scoring_format=chunk.scoring_format, teams=chunk.teams,
-                         snapshot_date=snapshot_date)
+    if chunk.source == "mfl":
+        resp = fetch_mfl(session, season=chunk.season, teams=chunk.teams,
+                         is_ppr=chunk.scoring_format == "ppr")
+        return transform_mfl(resp, season=chunk.season,
+                             scoring_format=chunk.scoring_format, teams=chunk.teams,
+                             snapshot_date=snapshot_date)
+    raise ValueError(f"unknown source {chunk.source!r}")
 
 
 def run_sync_adp(
@@ -95,6 +98,11 @@ def run_sync_adp(
     snapshot_date = today or datetime.now(UTC).date()
     seasons = parse_seasons(ns.seasons, snapshot_date.year)
     sources = [s.strip() for s in ns.sources.split(",") if s.strip()]
+    unknown = [s for s in sources if s not in ADP_SOURCES]
+    if unknown:
+        raise ValueError(
+            f"unknown --sources value(s) {unknown!r}; valid sources are {ADP_SOURCES!r}"
+        )
     formats = [f.strip() for f in ns.formats.split(",") if f.strip()]
     teams = [int(t) for t in str(ns.teams).split(",") if str(t).strip()]
     chunks = build_chunks(seasons=seasons, sources=sources, formats=formats,

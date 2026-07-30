@@ -145,3 +145,17 @@ def test_record_failed_returns_false_when_insert_reports_errors():
         ref=REF, chunk=AdpChunk("mfl", 2020, "ppr", 12), error="boom",
     )
     assert ok is False
+
+
+def test_record_returns_false_rather_than_raising_when_insert_rows_json_raises():
+    # A transport error, a permission error, or the well-known BigQuery
+    # streaming-404 window right after the runs table is first created all
+    # surface as insert_rows_json *raising*, not returning an errors list.
+    # _record's bool contract must stay total: callers (run_sync_adp's
+    # per-chunk try/except) rely on record_* never raising.
+    c = MagicMock(spec=bigquery.Client)
+    c.insert_rows_json.side_effect = RuntimeError("boom")
+    ok = RunsTable(client=c).record_success(
+        ref=REF, chunk=AdpChunk("ffc", 2026, "ppr", 12), rows_written=242,
+    )
+    assert ok is False
