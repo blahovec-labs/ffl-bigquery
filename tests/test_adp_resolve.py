@@ -89,6 +89,41 @@ def test_xref_rows_without_gsis_id_do_not_resolve():
     assert pd.isna(resolve_gsis_ids(adp, xref).iloc[0]["gsis_id"])
 
 
+def test_malformed_mfl_id_does_not_falsely_match_a_null_xref_mfl_id():
+    # An xref row can have a populated gsis_id but a missing/non-numeric mfl_id
+    # (malformed upstream data — not guaranteed clean, since resolve_gsis_ids is
+    # a pure function over any (adp, xref) pair). Both this row's parsed key and
+    # a malformed ADP mfl source_player_id parse to pd.NA — they must NOT be
+    # treated as a matching pair, or one player's gsis_id silently attributes to
+    # a completely different, unrelated ADP row.
+    xref = pd.DataFrame({"mfl_id": [None], "gsis_id": ["00-0099999"],
+                         "merge_name": ["ghost person"], "position": ["RB"]})
+    adp = _adp([{"source": "mfl", "source_player_id": ""}])
+    out = resolve_gsis_ids(adp, xref)
+    assert pd.isna(out.iloc[0]["gsis_id"]), (
+        "a malformed ADP mfl_id resolved to a real gsis_id via NA-to-NA index "
+        "collision — expected NULL"
+    )
+
+
+def test_mixed_mfl_and_ffc_batch_resolves_each_row_via_its_own_path_in_order():
+    # A single call carrying both sources — the two resolution branches are
+    # independent boolean-masked writes into the same `resolved` Series; this
+    # pins that they don't interact and that row order survives.
+    adp = _adp([
+        {"source": "mfl", "source_player_id": "11192", "player_name": "irrelevant"},
+        {"source": "ffc", "player_name": "Adrian Peterson", "position": "RB"},
+        {"source": "mfl", "source_player_id": "unresolvable"},
+        {"source": "ffc", "player_name": "Nobody Here", "position": "TE"},
+    ])
+    out = resolve_gsis_ids(adp, _xref())
+    resolved = list(out["gsis_id"])
+    assert resolved[0] == "00-0031234"
+    assert resolved[1] == "00-0025394"
+    assert pd.isna(resolved[2])
+    assert pd.isna(resolved[3])
+
+
 def test_column_set_is_unchanged_by_resolution():
     adp = _adp([{"player_name": "Adrian Peterson", "position": "RB"}])
     before = list(adp.columns)
