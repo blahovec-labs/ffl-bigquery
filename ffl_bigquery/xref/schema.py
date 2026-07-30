@@ -26,7 +26,7 @@ XREF_ID_COLUMNS: list[str] = [
 _INT_ID_COLUMNS = {
     "mfl_id", "sleeper_id", "espn_id", "fleaflicker_id", "cbs_id",
     "rotowire_id", "rotoworld_id", "ktc_id", "stats_id", "fantasy_data_id",
-    "swish_id", "nfl_id",
+    "swish_id", "nfl_id", "stats_global_id",
 }
 
 

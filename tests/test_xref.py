@@ -45,6 +45,41 @@ def test_transform_aligns_to_schema_and_stamps_ingested_at():
     assert out["ingested_at"].notna().all()
 
 
+def test_id_column_types_match_dtypes_measured_upstream():
+    # Verified against the full live load_ff_playerids() feed (12,468 rows) on
+    # 2026-07-29. stats_global_id is Int64 upstream (12,367 non-null) even
+    # though its values are unrelated to any of the confirmed-STRING id
+    # systems below, whose values also look numeric but are String dtype.
+    by_name = {s.name: s for s in FF_XREF_SCHEMA}
+    assert by_name["stats_global_id"].type == "INT64"
+    assert by_name["fantasypros_id"].type == "STRING"
+    assert by_name["pff_id"].type == "STRING"
+    assert by_name["yahoo_id"].type == "STRING"
+
+
+def test_transform_retains_row_with_null_gsis_id():
+    # gsis_id is NULLABLE by design: 37.9% of upstream rows have no NFL id
+    # (college prospects, players who never reached a roster). A regression
+    # that filtered on gsis_id notna would silently drop these rows while
+    # every other test in this file kept passing.
+    raw = pd.read_csv(FIXTURES / "ff_playerids_sample.csv")
+    out = transform_xref(raw)
+    row = out.loc[out["mfl_id"] == 17575]
+    assert len(row) == 1
+    assert pd.isna(row.iloc[0]["gsis_id"])
+
+
+def test_transform_retains_both_rows_of_a_duplicate_merge_name():
+    # merge_name + position is not unique upstream (two "adrian peterson"
+    # rows in the fixture, mfl_id 8658 and 6707, with different positions).
+    # Task 9's ambiguous-match refusal depends on both rows reaching it;
+    # transform_xref must not dedupe or otherwise collapse them.
+    raw = pd.read_csv(FIXTURES / "ff_playerids_sample.csv")
+    out = transform_xref(raw)
+    assert set(out.loc[out["merge_name"] == "adrian peterson", "mfl_id"]) == {8658, 6707}
+    assert len(out) == len(raw)
+
+
 def test_transform_drops_rows_without_the_merge_key():
     raw = pd.DataFrame({"mfl_id": [1, None], "merge_name": ["a b", "c d"],
                         "position": ["RB", "WR"]})
