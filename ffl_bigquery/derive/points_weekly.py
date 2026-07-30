@@ -1,11 +1,15 @@
 """ff_points_weekly: half-PPR + positional rank derived from load_player_stats().
 
 load_player_stats() already ships `fantasy_points` (standard) and
-`fantasy_points_ppr`, so this table only adds two things:
+`fantasy_points_ppr`, so this table mostly adds:
 
 - `fantasy_points_half_ppr` = fantasy_points + 0.5 * receptions.
 - `position_rank_ppr` = dense rank within (season, week, position) ordered
   by fantasy_points_ppr descending.
+- `gsis_id` = player_id. load_player_stats() has no gsis_id column of its
+  own; player_id IS the gsis_id under a different name (verified
+  ``^00-\\d+$`` against the 2023 feed). This table clusters on gsis_id, so
+  it must be populated rather than left to reindex to all-NULL.
 
 `fantasy_points_ppr` is carried through UNCHANGED from upstream rather than
 recomputed -- upstream's own column becomes a free correctness oracle a
@@ -46,8 +50,13 @@ FF_POINTS_WEEKLY_SCHEMA: list[ColumnSpec] = [
        "The nflverse player identifier as published by load_player_stats(). "
        "Joins ff_player_xref.", ["identifier", "join_key"]),
     _c("gsis_id", "STRING", "NULLABLE", "GSIS player id.",
-       "The NFL GSIS player identifier, when upstream publishes it "
-       "alongside player_id. Joins ff_player_xref.",
+       "load_player_stats() does not publish a separate gsis_id column -- "
+       "its player_id IS the GSIS id under a different name. Verified "
+       "against the live 2023 feed on 2026-07-30: 100% of non-null "
+       "player_id values match ^00-\\d+$ (e.g. 00-0023459, 00-0023853, "
+       "00-0025565). Set here as a copy of player_id so this table's "
+       "clustering key (see POINTS_WEEKLY_SPEC) is populated and joins "
+       "ff_player_xref on the canonical name.",
        ["identifier", "join_key"]),
     _c("player_name", "STRING", "NULLABLE", "Player display name.",
        "The player's display name as published by load_player_stats()."),
@@ -94,6 +103,12 @@ def derive_points_weekly(player_stats: pd.DataFrame, season: int) -> pd.DataFram
 
     df = player_stats.copy()
     df["season"] = season
+    # load_player_stats() has no gsis_id column -- player_id IS the gsis_id
+    # under a different name (verified ^00-\d+$ against the 2023 feed; see
+    # gsis_id's business_definition above). This is also the table's
+    # clustering key, so leaving it unset would ship an all-NULL cluster
+    # column.
+    df["gsis_id"] = df["player_id"]
     df["fantasy_points_standard"] = df["fantasy_points"]
     # Half-PPR: standard + 0.5 per reception. Also independently verified in
     # the test suite to equal (standard + ppr) / 2 -- see module docstring.
