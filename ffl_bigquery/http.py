@@ -18,8 +18,12 @@ log = logging.getLogger(__name__)
 
 _TLS_HINT = (
     "TLS verification failed. A local security product is likely intercepting HTTPS. "
-    "Use the system trust store instead of disabling verification: "
-    "`uv run --native-tls --with truststore ...`"
+    "`--native-tls`/`--with truststore` alone will NOT fix this -- those only make the "
+    "`truststore` package available, they don't activate it. You must call "
+    "`truststore.inject_into_ssl()` in-process before making requests, e.g. "
+    "`python -c \"import truststore; truststore.inject_into_ssl(); ...\"`. "
+    "(This repo's test suite does this automatically for network-marked tests via "
+    "tests/conftest.py; see README.md.)"
 )
 
 

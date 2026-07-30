@@ -71,8 +71,6 @@ def test_rejects_unknown_scoring_format_before_making_a_request():
 
 @pytest.mark.network
 def test_live_ffc_current_season_returns_players():
-    import truststore
-    truststore.inject_into_ssl()
     from ffl_bigquery.http import ThrottledSession
     s = ThrottledSession(user_agent="ffl-bigquery/0.1.0 (+tests)")
     r = fetch_ffc(s, season=2026, scoring_format="ppr", teams=12)
