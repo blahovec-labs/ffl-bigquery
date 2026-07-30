@@ -50,7 +50,7 @@ skips chunks already recorded `success` or `empty` in the runs table. `verify` c
 
 - Fantasy Football Calculator: seasons 2010→present. `half-ppr` history is shallow —
   pre-recent seasons return no data for that format.
-- MyFantasyLeague: seasons 2012→present. No per-format endpoint; only `ppr`/`standard`
+- MyFantasyLeague: seasons 2011→present. No per-format endpoint; only `ppr`/`standard`
   can be requested from it (the scoring axis is a single `IS_PPR` flag).
 
 See `CHANGELOG.md` for the full list of known limitations, including why `ff_adp`
@@ -62,7 +62,7 @@ snapshot-date drift is forward-capture-only for FFC.
 - **[Fantasy Football Calculator](https://fantasyfootballcalculator.com/)** — historical ADP
   (2010→present). Their ADP REST API is free for personal and commercial use; this project
   provides attribution as requested. Data updates once daily; do not poll frequently.
-- **[MyFantasyLeague](https://www.myfantasyleague.com/)** — historical ADP (2012→present)
+- **[MyFantasyLeague](https://www.myfantasyleague.com/)** — historical ADP (2011→present)
   via the free `export?TYPE=adp` endpoint.
 
 ## Local development (Windows / TLS interception)

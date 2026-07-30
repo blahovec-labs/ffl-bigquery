@@ -58,7 +58,7 @@ FF_ADP_SCHEMA: list[ColumnSpec] = [
           valid_values=["ffc", "mfl"], example="ffc"),
     _spec("season", "INT64", "REQUIRED",
           "NFL season the draft was for.",
-          "Season year of the fantasy draft. FFC has data from 2010; MFL from 2012. "
+          "Season year of the fantasy draft. FFC has data from 2010; MFL from 2011. "
           "Earlier years return empty responses.",
           tags=["identifier", "primary_key"], valid_range=(2010.0, 2100.0), example=2026),
     _spec("scoring_format", "STRING", "REQUIRED",
