@@ -89,18 +89,18 @@ class RunsTable:
         chunk: AdpChunk,
         rows_written: int,
         resolution_rate: float | None = None,
-    ) -> None:
-        self._record(ref=ref, chunk=chunk, status="success",
-                     rows_written=rows_written, resolution_rate=resolution_rate,
-                     error=None)
+    ) -> bool:
+        return self._record(ref=ref, chunk=chunk, status="success",
+                             rows_written=rows_written, resolution_rate=resolution_rate,
+                             error=None)
 
-    def record_empty(self, *, ref: TableRef, chunk: AdpChunk) -> None:
-        self._record(ref=ref, chunk=chunk, status="empty", rows_written=0,
-                     resolution_rate=None, error=None)
+    def record_empty(self, *, ref: TableRef, chunk: AdpChunk) -> bool:
+        return self._record(ref=ref, chunk=chunk, status="empty", rows_written=0,
+                             resolution_rate=None, error=None)
 
-    def record_failed(self, *, ref: TableRef, chunk: AdpChunk, error: str) -> None:
-        self._record(ref=ref, chunk=chunk, status="failed", rows_written=None,
-                     resolution_rate=None, error=error[:4000])
+    def record_failed(self, *, ref: TableRef, chunk: AdpChunk, error: str) -> bool:
+        return self._record(ref=ref, chunk=chunk, status="failed", rows_written=None,
+                             resolution_rate=None, error=error[:4000])
 
     def _record(
         self,
@@ -111,7 +111,7 @@ class RunsTable:
         rows_written: int | None,
         resolution_rate: float | None,
         error: str | None,
-    ) -> None:
+    ) -> bool:
         row = {
             "source": chunk.source,
             "season": chunk.season,
@@ -126,4 +126,6 @@ class RunsTable:
         }
         errors = self.client.insert_rows_json(str(ref), [row])
         if errors:
-            log.warning("runs insert errors: %s", errors)
+            log.error("runs insert errors: %s", errors)
+            return False
+        return True

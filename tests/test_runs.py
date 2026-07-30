@@ -91,3 +91,57 @@ def test_record_success_carries_rows_written():
     row = c.insert_rows_json.call_args[0][1][0]
     assert row["status"] == "success"
     assert row["rows_written"] == 242
+
+
+def test_record_success_returns_true_on_clean_insert():
+    c = MagicMock(spec=bigquery.Client)
+    c.insert_rows_json.return_value = []
+    ok = RunsTable(client=c).record_success(
+        ref=REF, chunk=AdpChunk("ffc", 2026, "ppr", 12), rows_written=242,
+    )
+    assert ok is True
+
+
+def test_record_success_returns_false_when_insert_reports_errors():
+    c = MagicMock(spec=bigquery.Client)
+    c.insert_rows_json.return_value = [{"index": 0, "errors": ["boom"]}]
+    ok = RunsTable(client=c).record_success(
+        ref=REF, chunk=AdpChunk("ffc", 2026, "ppr", 12), rows_written=242,
+    )
+    assert ok is False
+
+
+def test_record_empty_returns_true_on_clean_insert():
+    c = MagicMock(spec=bigquery.Client)
+    c.insert_rows_json.return_value = []
+    ok = RunsTable(client=c).record_empty(
+        ref=REF, chunk=AdpChunk("ffc", 2007, "ppr", 12),
+    )
+    assert ok is True
+
+
+def test_record_empty_returns_false_when_insert_reports_errors():
+    c = MagicMock(spec=bigquery.Client)
+    c.insert_rows_json.return_value = [{"index": 0, "errors": ["boom"]}]
+    ok = RunsTable(client=c).record_empty(
+        ref=REF, chunk=AdpChunk("ffc", 2007, "ppr", 12),
+    )
+    assert ok is False
+
+
+def test_record_failed_returns_true_on_clean_insert():
+    c = MagicMock(spec=bigquery.Client)
+    c.insert_rows_json.return_value = []
+    ok = RunsTable(client=c).record_failed(
+        ref=REF, chunk=AdpChunk("mfl", 2020, "ppr", 12), error="boom",
+    )
+    assert ok is True
+
+
+def test_record_failed_returns_false_when_insert_reports_errors():
+    c = MagicMock(spec=bigquery.Client)
+    c.insert_rows_json.return_value = [{"index": 0, "errors": ["boom"]}]
+    ok = RunsTable(client=c).record_failed(
+        ref=REF, chunk=AdpChunk("mfl", 2020, "ppr", 12), error="boom",
+    )
+    assert ok is False
