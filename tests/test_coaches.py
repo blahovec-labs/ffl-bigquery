@@ -1,3 +1,5 @@
+from datetime import date
+
 import pandas as pd
 
 from ffl_bigquery.coaches.schema import NFL_COACHES_SCHEMA
@@ -67,4 +69,10 @@ def test_season_comes_from_the_loop_not_upstream():
 
 def test_game_date_is_a_date_not_a_string():
     out = transform_coaches(_sched(), 2019)
-    assert str(out["game_date"].iloc[0]) == "2019-09-05"
+    value = out["game_date"].iloc[0]
+    # str(value) == "2019-09-05" is true for BOTH a real date(2019, 9, 5) and
+    # the untouched upstream string "2019-09-05" -- it would not catch a
+    # regression to "never convert". Assert the type instead.
+    assert isinstance(value, date)
+    assert not isinstance(value, str)
+    assert value == date(2019, 9, 5)
