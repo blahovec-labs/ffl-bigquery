@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "encoding": "utf-8",
+  "adp": {
+    "totalDrafts": "12",
+    "totalPicks": "144",
+    "player": {
+      "id": "16161",
+      "minPick": "1",
+      "maxPick": "11",
+      "averagePick": "3.28",
+      "rank": "1",
+      "draftsSelectedIn": "39",
+      "draftSelPct": "13"
+    }
+  }
+}

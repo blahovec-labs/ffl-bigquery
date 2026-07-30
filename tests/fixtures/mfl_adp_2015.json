@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "encoding": "utf-8",
+  "adp": {
+    "totalDrafts": "15877",
+    "totalPicks": "421904",
+    "player": [
+      {
+        "draftSelPct": "66",
+        "id": "11192",
+        "minPick": "1",
+        "rank": "1",
+        "averagePick": "9.11",
+        "draftsSelectedIn": "9068",
+        "maxPick": "439"
+      },
+      {
+        "maxPick": "439",
+        "minPick": "1",
+        "draftSelPct": "68",
+        "id": "9988",
+        "draftsSelectedIn": "9383",
+        "averagePick": "9.58",
+        "rank": "2"
+      }
+    ]
+  }
+}
