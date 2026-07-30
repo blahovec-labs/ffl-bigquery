@@ -152,3 +152,41 @@ class BigQueryWriter:
             self.client.query(f"DROP TABLE IF EXISTS `{stage}`").result()
         log.info("merged %d rows into %s", len(df), ref)
         return len(df)
+
+    def write_season(
+        self,
+        ref: TableRef,
+        df: pd.DataFrame,
+        *,
+        season: int,
+        schema: list[ColumnSpec],
+    ) -> int:
+        """DELETE rows for `season`, then append `df`. Returns rows written.
+
+        The DELETE runs even when df is empty: a season that legitimately goes
+        from N rows to 0 upstream must not leave stale rows behind. This is the
+        idempotency contract for season-chunked tables -- re-running a season
+        replaces it wholesale.
+        """
+        bq_schema = to_bq_schema(schema)
+        self.client.query(
+            f"DELETE FROM `{ref}` WHERE season = @season",
+            job_config=bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("season", "INT64", season)
+                ],
+            ),
+        ).result()
+        if df.empty:
+            log.info("season %s of %s is empty; deleted only", season, ref)
+            return 0
+        self.client.load_table_from_dataframe(
+            coerce_df_for_bq(df, bq_schema),
+            str(ref),
+            job_config=bigquery.LoadJobConfig(
+                write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+                schema=bq_schema,
+            ),
+        ).result()
+        log.info("wrote %d rows to %s season=%s", len(df), ref, season)
+        return len(df)
