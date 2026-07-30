@@ -161,12 +161,26 @@ class BigQueryWriter:
         season: int,
         schema: list[ColumnSpec],
     ) -> int:
-        """DELETE rows for `season`, then append `df`. Returns rows written.
+        """DELETE rows for `season`, then append `df`. Returns rows actually written.
 
         The DELETE runs even when df is empty: a season that legitimately goes
         from N rows to 0 upstream must not leave stale rows behind. This is the
         idempotency contract for season-chunked tables -- re-running a season
         replaces it wholesale.
+
+        `df` is NOT trusted to actually be season `season` throughout: some
+        season-derivation rules produce boundary rows that legitimately belong
+        to a different season (e.g. a depth-chart row dated in March derives
+        the *next* season even though it was fetched as part of this season's
+        chunk). A row like that would survive this chunk's DELETE, land in the
+        wrong partition, and later be destroyed by that season's own DELETE --
+        making the table's contents depend on chunk run order and breaking
+        idempotency. So if `df` has a `season` column, rows whose `season`
+        disagrees with the chunk argument (or is null, and so can't be placed
+        in any partition) are dropped here rather than written; they are
+        written correctly when their own season's chunk runs. A frame with no
+        `season` column at all is passed through unchanged -- some callers
+        legitimately have none.
         """
         bq_schema = to_bq_schema(schema)
         self.client.query(
@@ -180,8 +194,30 @@ class BigQueryWriter:
         if df.empty:
             log.info("season %s of %s is empty; deleted only", season, ref)
             return 0
+
+        df = coerce_df_for_bq(df, bq_schema)
+        if "season" in df.columns:
+            is_null = df["season"].isna()
+            is_mismatched = ~is_null & (df["season"] != season)
+            n_null = int(is_null.sum())
+            n_mismatched = int(is_mismatched.sum())
+            if n_null or n_mismatched:
+                offending = sorted(df.loc[is_mismatched, "season"].unique().tolist())
+                log.warning(
+                    "write_season(%s, season=%s): dropping %d row(s) with "
+                    "season != %s (offending values=%s) and %d row(s) with "
+                    "null season",
+                    ref, season, n_mismatched, season, offending, n_null,
+                )
+                df = df.loc[~(is_null | is_mismatched)]
+
+        if df.empty:
+            log.info(
+                "season %s of %s: all rows dropped by season guard", season, ref,
+            )
+            return 0
         self.client.load_table_from_dataframe(
-            coerce_df_for_bq(df, bq_schema),
+            df,
             str(ref),
             job_config=bigquery.LoadJobConfig(
                 write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
