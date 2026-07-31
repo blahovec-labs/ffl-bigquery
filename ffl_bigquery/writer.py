@@ -45,6 +45,19 @@ def coerce_df_for_bq(
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")  # type: ignore[union-attr]
         elif ft in ("FLOAT64", "FLOAT", "NUMERIC"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
+        elif ft == "STRING" and df[col].dtype != object:
+            # A STRING field fed a non-object column fails at LOAD time, not here:
+            #   Error converting Pandas column with name: "pos_slot" and
+            #   datatype: "int32" to an appropriate pyarrow datatype
+            # This bit twice before the branch existed -- stats_global_id (Int64
+            # upstream, declared STRING) and depth_charts.pos_slot (int32 in the
+            # 2025 vintage, a slot LABEL that is a string in every other year).
+            # Upstream dtypes here are demonstrably vintage-dependent, so relying
+            # on a declared type matching the frame is not safe. Cast, preserving
+            # NA rather than turning it into the literal string "nan"/"<NA>".
+            df[col] = df[col].astype("string").astype(object).where(
+                df[col].notna(), None
+            )
     return df
 
 

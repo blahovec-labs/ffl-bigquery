@@ -122,3 +122,29 @@ def test_merge_rows_on_empty_df_is_a_noop():
     assert n == 0
     assert not c.query.called
     assert not c.load_table_from_dataframe.called
+
+
+def test_coerce_casts_a_non_string_column_to_string_for_a_string_field():
+    # A STRING field fed a non-object column fails at LOAD time with a pyarrow
+    # conversion error, not here -- so it is invisible to every offline test that
+    # doesn't actually load. Hit twice live: stats_global_id and depth_charts.pos_slot.
+    schema = [bigquery.SchemaField("pos_slot", "STRING")]
+    df = coerce_df_for_bq(pd.DataFrame({"pos_slot": pd.Series([1, 2], dtype="int32")}), schema)
+    assert df["pos_slot"].dtype == object
+    assert df["pos_slot"].tolist() == ["1", "2"]
+
+
+def test_coerce_string_cast_preserves_na_rather_than_stringifying_it():
+    # "nan"/"<NA>" as a literal value would be worse than NULL.
+    schema = [bigquery.SchemaField("pos_slot", "STRING")]
+    df = coerce_df_for_bq(
+        pd.DataFrame({"pos_slot": pd.Series([1, None], dtype="Int32")}), schema
+    )
+    assert df["pos_slot"].iloc[0] == "1"
+    assert df["pos_slot"].iloc[1] is None
+
+
+def test_coerce_leaves_an_already_object_string_column_alone():
+    schema = [bigquery.SchemaField("team", "STRING")]
+    df = coerce_df_for_bq(pd.DataFrame({"team": ["DET", None]}), schema)
+    assert df["team"].tolist() == ["DET", None]
