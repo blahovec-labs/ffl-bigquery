@@ -1,14 +1,10 @@
-from pathlib import Path
-
-import pandas as pd
 import pytest
 
+from ffl_bigquery._schema_samples import read_sample
 from ffl_bigquery.nflverse.tables.injuries import INJURIES_SPEC
 from ffl_bigquery.nflverse.tables.opportunity import OPPORTUNITY_SPEC
 from ffl_bigquery.nflverse.tables.snap_counts import SNAP_COUNTS_SPEC
 from ffl_bigquery.schema import spec_names
-
-FIX = Path(__file__).parent / "fixtures" / "nflverse"
 
 
 @pytest.mark.parametrize(
@@ -44,7 +40,7 @@ def test_partitioned_on_season_with_at_most_four_cluster_columns(spec):
      (INJURIES_SPEC, "injuries")],
 )
 def test_transform_stamps_the_loop_season_and_aligns_to_schema(spec, fixture):
-    raw = pd.read_parquet(FIX / f"{fixture}.parquet")
+    raw = read_sample(fixture)
     out = spec.transform(raw, 1999)
     assert list(out.columns) == spec_names(spec.schema)
     # The loop's season wins over whatever upstream carried.

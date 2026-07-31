@@ -7,24 +7,21 @@ a no-op, and it becomes a time series only if captured repeatedly.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 
+from ffl_bigquery._schema_samples import read_sample
 from ffl_bigquery._transform_util import align_to_schema
 from ffl_bigquery.partition import TimePartition
 from ffl_bigquery.schema import to_bq_schema
 from ffl_bigquery.schema_gen import specs_from_frame
 from ffl_bigquery.writer import BigQueryWriter, TableRef
 
-_SAMPLE = Path(__file__).resolve().parents[3] / "tests/fixtures/nflverse/ff_rankings.parquet"
-
 FF_RANKINGS_KEYS = ["scrape_date", "ecr_type", "id"]
 FF_RANKINGS_PARTITION = TimePartition(
     field="scrape_date", clustering=["ecr_type", "pos"]
 )
 FF_RANKINGS_SCHEMA = specs_from_frame(
-    pd.read_parquet(_SAMPLE), table="ff_rankings",
+    read_sample("ff_rankings"), table="ff_rankings",
     type_overrides={"scrape_date": "DATE"},
     required=("scrape_date", "ecr_type", "id"),
     enrichment={

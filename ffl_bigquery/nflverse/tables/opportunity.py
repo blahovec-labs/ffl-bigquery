@@ -1,21 +1,18 @@
 """ff_opportunity: weekly fantasy opportunity/usage metrics, 2006-2025 (159 cols)."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 
+from ffl_bigquery._schema_samples import read_sample
 from ffl_bigquery._transform_util import align_to_schema
 from ffl_bigquery.nflverse.spec import NflverseTableSpec
 from ffl_bigquery.partition import SeasonRangePartition
 from ffl_bigquery.schema_gen import specs_from_frame
 
-_SAMPLE = Path(__file__).resolve().parents[3] / "tests/fixtures/nflverse/ff_opportunity.parquet"
-
 # `season` arrives as String upstream; INTEGER RANGE partitioning requires INT64.
-# `season` AND `week` both arrive as floats upstream. season must be INT64 for
-# INTEGER RANGE partitioning; week must be INT64 because BigQuery refuses FLOAT64
-# as a CLUSTERING key -- "Field week has type FLOAT, which is not supported for
+# `week` arrives as a float upstream. season must be INT64 for INTEGER RANGE
+# partitioning; week must be INT64 because BigQuery refuses FLOAT64 as a
+# CLUSTERING key -- "Field week has type FLOAT, which is not supported for
 # clustering" (hit live on 2026-07-30 creating this table).
 _TYPE_OVERRIDES = {"season": "INT64", "week": "INT64"}
 _ENRICHMENT = {
@@ -28,7 +25,7 @@ _ENRICHMENT = {
 }
 
 OPPORTUNITY_SCHEMA = specs_from_frame(
-    pd.read_parquet(_SAMPLE), table="ff_opportunity",
+    read_sample("ff_opportunity"), table="ff_opportunity",
     enrichment=_ENRICHMENT, type_overrides=_TYPE_OVERRIDES, required=("season",),
 )
 

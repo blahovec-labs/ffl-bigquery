@@ -49,6 +49,16 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ffl_bigquery"]
+# Six table specs read a bundled parquet schema-sample at import time
+# (ffl_bigquery/_schema_samples/*.parquet, ~230 KB total; see that package's
+# docstring). hatchling's default VCS-tracked file selection happens to pick
+# these up as long as they're `git add`-ed, but that makes wheel correctness
+# depend on git index state rather than being guaranteed by config -- a
+# contributor who adds a *new* sample file and forgets `git add` (or a CI
+# checkout/export path that isn't a full git working tree) would ship a
+# wheel silently missing it, reproducing Critical 1. `artifacts` pins the
+# inclusion explicitly so it holds regardless.
+artifacts = ["ffl_bigquery/_schema_samples/*.parquet"]
 
 [tool.ruff]
 line-length = 100

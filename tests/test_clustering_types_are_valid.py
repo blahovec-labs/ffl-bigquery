@@ -11,9 +11,15 @@ guard checks every spec at once so the whole class cannot recur silently.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 
 from ffl_bigquery.coaches.sync import COACHES_SPEC
+from ffl_bigquery.coordinators.schema import (
+    NFL_COORDINATORS_PARTITION,
+    NFL_COORDINATORS_SCHEMA,
+)
 from ffl_bigquery.derive.points_weekly import POINTS_WEEKLY_SPEC
 from ffl_bigquery.derive.scheme_week import SCHEME_WEEK_SPEC
 from ffl_bigquery.nflverse.tables.depth_charts import DEPTH_CHARTS_SPEC
@@ -21,16 +27,38 @@ from ffl_bigquery.nflverse.tables.ftn_charting import FTN_CHARTING_SPEC
 from ffl_bigquery.nflverse.tables.injuries import INJURIES_SPEC
 from ffl_bigquery.nflverse.tables.opportunity import OPPORTUNITY_SPEC
 from ffl_bigquery.nflverse.tables.participation import PARTICIPATION_SPEC
+from ffl_bigquery.nflverse.tables.rankings import FF_RANKINGS_PARTITION, FF_RANKINGS_SCHEMA
 from ffl_bigquery.nflverse.tables.snap_counts import SNAP_COUNTS_SPEC
 
 # https://cloud.google.com/bigquery/docs/clustered-tables#limitations
 CLUSTERABLE = {"INT64", "STRING", "DATE", "TIMESTAMP", "DATETIME", "BOOL",
                "NUMERIC", "BIGNUMERIC"}
 
+
+@dataclass(frozen=True)
+class _PseudoSpec:
+    """ff_rankings and nfl_coordinators aren't NflverseTableSpecs (they're
+    not season-chunked -- see rankings.py/coordinators/schema.py), so they
+    have no `.name`/`.schema`/`.partition` bundle to reuse here. This is the
+    minimal shape the checks below actually need."""
+
+    name: str
+    schema: list
+    partition: object
+
+
 ALL_SPECS = [
     OPPORTUNITY_SPEC, SNAP_COUNTS_SPEC, INJURIES_SPEC, DEPTH_CHARTS_SPEC,
     PARTICIPATION_SPEC, FTN_CHARTING_SPEC, COACHES_SPEC, POINTS_WEEKLY_SPEC,
     SCHEME_WEEK_SPEC,
+    # Both of these build their schema types from an inferred/measured
+    # source (a parquet sample for ff_rankings; Wikipedia text for
+    # nfl_coordinators) rather than a hand-picked BqType -- exactly the
+    # "clusters on a type that turns out not to be clusterable" failure mode
+    # this guard exists to catch, so they belong here even though they
+    # aren't part of the season-chunked ALL_TABLE_NAMES registry.
+    _PseudoSpec("ff_rankings", FF_RANKINGS_SCHEMA, FF_RANKINGS_PARTITION),
+    _PseudoSpec("nfl_coordinators", NFL_COORDINATORS_SCHEMA, NFL_COORDINATORS_PARTITION),
 ]
 
 

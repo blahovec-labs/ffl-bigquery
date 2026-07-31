@@ -7,7 +7,7 @@ import pytest
 from ffl_bigquery.nflverse.driver import run_sync_nflverse, run_sync_nflverse_cli
 from ffl_bigquery.nflverse.spec import NflverseTableSpec
 from ffl_bigquery.schema import INGESTED_AT_SPEC, ColumnSpec
-from ffl_bigquery.writer import TableRef
+from ffl_bigquery.writer import TableRef, WriteSeasonResult
 
 
 def _spec_cols() -> list[ColumnSpec]:
@@ -125,6 +125,49 @@ def test_runlog_write_failures_are_counted_and_the_run_still_completes(caplog):
     assert rc == 0
     assert w.write_season.call_count == 2
     assert "2 run-log write failures" in caplog.text
+
+
+def test_dropped_rows_are_accumulated_and_reported_in_the_summary(caplog):
+    # write_season's dropped count must not vanish into a per-chunk log line
+    # only -- the run-level summary needs it too, escalated to error like
+    # runlog_failures already is (dropped rows above a warning is exactly
+    # the invisibility Task 2 exists to fix).
+    w, r = MagicMock(), MagicMock()
+    w.write_season.side_effect = [
+        WriteSeasonResult(1, 3), WriteSeasonResult(1, 0),
+    ]
+    r.completed_chunks.return_value = set()
+    r.record_success.return_value = True
+    with caplog.at_level("ERROR"):
+        rc = run_sync_nflverse([_table()], seasons=[2020, 2021], writer=w, runs=r,
+                               runs_ref=TableRef.parse("p.d.runs"), table_refs=_refs("t"))
+    assert rc == 0
+    assert "3 row(s) dropped by the season guard" in caplog.text
+
+
+def test_summary_line_stays_at_info_when_nothing_is_dropped(caplog):
+    w, r = MagicMock(), MagicMock()
+    w.write_season.return_value = WriteSeasonResult(1, 0)
+    r.completed_chunks.return_value = set()
+    r.record_success.return_value = True
+    with caplog.at_level("INFO"):
+        run_sync_nflverse([_table()], seasons=[2020], writer=w, runs=r,
+                          runs_ref=TableRef.parse("p.d.runs"), table_refs=_refs("t"))
+    error_records = [rec for rec in caplog.records if rec.levelname == "ERROR"]
+    assert error_records == []
+    assert "0 row(s) dropped by the season guard" in caplog.text
+
+
+def test_dropped_total_defaults_to_zero_for_a_writer_returning_a_bare_int():
+    # A test double / older writer returning a plain int (no .dropped
+    # attribute) must not crash the driver -- getattr(..., 0) covers it.
+    w, r = MagicMock(), MagicMock()
+    w.write_season.return_value = 1
+    r.completed_chunks.return_value = set()
+    r.record_success.return_value = True
+    rc = run_sync_nflverse([_table()], seasons=[2020], writer=w, runs=r,
+                           runs_ref=TableRef.parse("p.d.runs"), table_refs=_refs("t"))
+    assert rc == 0
 
 
 def test_transform_receives_the_season_and_its_output_is_written():

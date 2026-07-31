@@ -120,3 +120,40 @@ def test_write_season_return_value_is_rows_actually_written_not_rows_passed():
     n = BigQueryWriter(client=c).write_season(REF, df, season=2025, schema=SCHEMA)
     assert n == 1
     assert n != len(df)
+
+
+def test_write_season_exposes_the_dropped_count():
+    # write_season's own docstring warns that dropped rows are only "written
+    # correctly when their own season's chunk runs" IF that season is in the
+    # run's requested range -- callers need the count to know whether that
+    # promise held. Prior to this, the count was only visible as a log line.
+    c = MagicMock(spec=bigquery.Client)
+    df = pd.DataFrame({"season": [2025, 2026, 2026, pd.NA], "val": [1.0, 2.0, 3.0, 4.0]})
+    n = BigQueryWriter(client=c).write_season(REF, df, season=2025, schema=SCHEMA)
+    assert n.dropped == 3          # 2 mismatched (2026) + 1 null
+    assert n == 1                  # still compares/behaves as the written count
+
+
+def test_write_season_dropped_is_zero_when_nothing_is_dropped():
+    c = MagicMock(spec=bigquery.Client)
+    df = pd.DataFrame({"season": [2020, 2020], "val": [1.0, 2.0]})
+    n = BigQueryWriter(client=c).write_season(REF, df, season=2020, schema=SCHEMA)
+    assert n.dropped == 0
+
+
+def test_write_season_dropped_is_zero_on_empty_df():
+    c = MagicMock(spec=bigquery.Client)
+    n = BigQueryWriter(client=c).write_season(
+        REF, pd.DataFrame(columns=["season", "val"]), season=2020, schema=SCHEMA,
+    )
+    assert n.dropped == 0
+
+
+def test_write_season_dropped_when_every_row_is_dropped():
+    # All rows disagree with the chunk season -- the empty-after-filter early
+    # return must still carry the dropped count, not silently reset to 0.
+    c = MagicMock(spec=bigquery.Client)
+    df = pd.DataFrame({"season": [2026, 2026], "val": [1.0, 2.0]})
+    n = BigQueryWriter(client=c).write_season(REF, df, season=2025, schema=SCHEMA)
+    assert n == 0
+    assert n.dropped == 2

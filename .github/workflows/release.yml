@@ -23,5 +23,23 @@ jobs:
         run: uv run pytest -m "not network" -q
       - name: Build
         run: uv run python -m build
+      # Installs the actual built artifact into a throwaway venv (not the
+      # `uv sync --extra dev` env the test step used, which has ffl_bigquery
+      # importable from the repo checkout and would never catch this) and
+      # runs it from outside the repo. This is exactly the check that would
+      # have caught the pre-tag Critical 1 bug: six table modules read a
+      # parquet schema-sample via `Path(__file__).parents[3] / "tests/..."`,
+      # which resolves inside a repo checkout but not from a real `pip
+      # install` into site-packages -- FileNotFoundError on every
+      # sync-nflverse invocation, dry-run included. A passing `pytest` run
+      # from the repo root cannot detect that class of bug; only installing
+      # the wheel and running it somewhere `tests/` doesn't exist can.
+      - name: Smoke-test the built wheel
+        run: |
+          uv venv /tmp/wheel-smoke
+          uv pip install --python /tmp/wheel-smoke/bin/python dist/*.whl
+          cd /tmp
+          /tmp/wheel-smoke/bin/ffl-bigquery --version
+          /tmp/wheel-smoke/bin/ffl-bigquery sync-nflverse --dataset p.d --dry-run
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

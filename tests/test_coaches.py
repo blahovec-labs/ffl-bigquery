@@ -76,3 +76,28 @@ def test_game_date_is_a_date_not_a_string():
     assert isinstance(value, date)
     assert not isinstance(value, str)
     assert value == date(2019, 9, 5)
+
+
+def test_game_date_survives_an_upstream_rename_to_game_date():
+    # transform_coaches picks date_col = "gameday" if present, else
+    # "game_date" -- a defensive branch for a hypothetical upstream rename.
+    # When date_col == "game_date", the old code assigned out["game_date"]
+    # and then immediately dropped that same column, so align_to_schema
+    # re-materialized it as all-NULL: the rename-survival branch silently
+    # produced no dates at all. Feed a frame with "game_date" instead of
+    # "gameday" and assert real values survive.
+    sched = pd.DataFrame({
+        "game_id": ["2019_01_GB_CHI", "2019_02_GB_MIN"],
+        "season": [2019, 2019],
+        "week": [1, 2],
+        "game_date": ["2019-09-05", "2019-09-15"],
+        "home_team": ["CHI", "MIN"],
+        "away_team": ["GB", "GB"],
+        "home_coach": ["Matt Nagy", "Mike Zimmer"],
+        "away_coach": ["Matt LaFleur", "Matt LaFleur"],
+    })
+    out = transform_coaches(sched, 2019)
+    assert out["game_date"].notna().all()
+    value = out["game_date"].iloc[0]
+    assert isinstance(value, date)
+    assert value == date(2019, 9, 5)

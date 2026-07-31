@@ -47,7 +47,7 @@ def run_sync_nflverse(
         )
 
     done = runs.completed_chunks(ref=runs_ref) if resume else set()
-    succeeded = failed = runlog_failures = 0
+    succeeded = failed = runlog_failures = dropped_total = 0
 
     for spec in specs:
         for season in seasons:
@@ -66,6 +66,10 @@ def run_sync_nflverse(
                 n = writer.write_season(
                     refs[spec.name], df, season=season, schema=spec.schema
                 )
+                # `.dropped` is only present on a real WriteSeasonResult; a
+                # test double or future writer that returns a bare int still
+                # works, it just can't report a drop count.
+                dropped_total += getattr(n, "dropped", 0)
                 if not runs.record_success(
                     ref=runs_ref, chunk=chunk, rows_written=n
                 ):
@@ -77,10 +81,11 @@ def run_sync_nflverse(
                     runlog_failures += 1
                 failed += 1
 
-    log_fn = log.error if runlog_failures else log.info
+    log_fn = log.error if (runlog_failures or dropped_total) else log.info
     log_fn(
-        "sync-nflverse complete: %d ok, %d failed, %d run-log write failures",
-        succeeded, failed, runlog_failures,
+        "sync-nflverse complete: %d ok, %d failed, %d run-log write failures, "
+        "%d row(s) dropped by the season guard",
+        succeeded, failed, runlog_failures, dropped_total,
     )
     return 1 if succeeded == 0 and failed > 0 else 0
 

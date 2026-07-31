@@ -4,14 +4,14 @@ Opt-in and honestly caveated. Pro Football Reference -- the source that would
 otherwise be authoritative for this -- returns HTTP 403 to automated fetches and
 is not usable at all. Wikipedia team-season infobox pages are the only source this
 library found that's actually fetchable, and even there the fields are far from
-complete. Measured across 24 sampled team-seasons (6 teams x 2005/2012/2019/2024):
+complete. MEASURED FILL RATE (full backfill, 16 seasons x 32 teams x 2 roles =
+1,024 possible rows): 473/1,024 = 46.2%. An earlier, smaller sample (24 team-
+seasons: 6 teams x 2005/2012/2019/2024) had measured off_coach/def_coach at
+9/24 = 37% each and all six 2005 team-seasons with neither field populated --
+that sample figure undershot the real backfill and is kept below only as
+color, not the headline number.
 
-    coach       24/24  (100%)  -- already first-class in nfl_coaches, per game
-    off_coach    9/24   (37%)
-    def_coach    9/24   (37%)
-
-and all six 2005 team-seasons sampled had neither off_coach nor def_coach
-populated. This table therefore never runs as part of `sync-nflverse` -- only the
+This table therefore never runs as part of `sync-nflverse` -- only the
 explicit `sync-coordinators` CLI command -- and every row carries its own
 provenance (source page title, parse confidence, retrieved_at) rather than
 presenting silence as completeness. Absence of a row for a (season, team, role)
@@ -73,13 +73,16 @@ NFL_COORDINATORS_SCHEMA: list[ColumnSpec] = [
        "blank or garbled infobox field produces no row, never an empty-string "
        "or wrong name.",
        ["dimension"], gotchas=[
-           "MEASURED FILL RATE: 37% (9 of 24 sampled team-seasons, 6 teams x "
-           "2005/2012/2019/2024) -- a genuine data-availability ceiling, not "
-           "an ingestion bug. All six 2005 team-seasons sampled had neither "
-           "coordinator field populated at all; expect older seasons to be "
-           "systematically worse than this. Never treat a missing "
-           "(season, team, role) row as 'no coordinator that year' -- it "
-           "means Wikipedia didn't publish one.",
+           "MEASURED FILL RATE: 46.2% (473 of 1,024 possible rows -- 16 "
+           "seasons x 32 teams x 2 roles, full backfill) -- a genuine "
+           "data-availability ceiling, not an ingestion bug. An earlier, "
+           "smaller sample (24 team-seasons: 6 teams x "
+           "2005/2012/2019/2024) measured 37% and all six 2005 "
+           "team-seasons sampled had neither coordinator field populated "
+           "at all; expect older seasons to be systematically worse than "
+           "the 46.2% headline. Never treat a missing (season, team, role) "
+           "row as 'no coordinator that year' -- it means Wikipedia "
+           "didn't publish one.",
        ], source_field="off_coach|def_coach"),
     _c("source", "STRING", "NULLABLE", "Wikipedia page title this row was parsed from.",
        "The exact Wikipedia page title (e.g. '2024 Green Bay Packers season') "

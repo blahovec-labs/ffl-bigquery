@@ -51,9 +51,10 @@ NFL_COACHES_SCHEMA: list[ColumnSpec] = [
        "False when derived from away_team/away_coach.", ["dimension"]),
     _c("head_coach", "STRING", "NULLABLE", "Head coach of `team` in this game.",
        "The head coach who led `team` in this specific game, from "
-       "home_coach/away_coach. Measured at 100% fill 1999-2026 (four eras "
-       "sampled: 2005/2012/2019/2024), which is what makes per-game grain "
-       "viable here: because every game already carries a real coach name, "
+       "home_coach/away_coach. Measured at 100% fill in four sampled eras "
+       "(2005/2012/2019/2024) -- not a claim about every season 1999-2026, "
+       "just those four -- which is what makes per-game grain viable here: "
+       "because every game already carries a real coach name, "
        "unpivoting into (game_id, team) rows -- rather than inventing a "
        "season-level 'coach of record' rule -- lets a mid-season firing show "
        "up as two different values across two weeks, with no special case.",

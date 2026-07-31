@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sc = sub.add_parser(
         "sync-coordinators",
-        help="Fetch OC/DC from Wikipedia team-season pages (opt-in, ~37%% measured "
+        help="Fetch OC/DC from Wikipedia team-season pages (opt-in, ~46.2%% measured "
              "fill -- never part of sync-nflverse)",
     )
     sc.add_argument("--seasons", required=True, help="e.g. 2019-2024 | 2015,2020 | 2024")

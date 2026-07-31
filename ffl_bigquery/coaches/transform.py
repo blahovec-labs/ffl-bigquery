@@ -34,5 +34,10 @@ def transform_coaches(schedules: pd.DataFrame, season: int) -> pd.DataFrame:
     out = pd.concat([home, away], ignore_index=True)
     out["season"] = season
     out["game_date"] = pd.to_datetime(out[date_col], errors="coerce").dt.date
-    out = out.drop(columns=[date_col])
+    # When date_col is already "game_date", dropping it here would delete the
+    # column just assigned above -- align_to_schema would then re-materialize
+    # it as all-NULL, silently. Only drop when date_col is a DIFFERENT column
+    # ("gameday") that needs to be removed after being consumed.
+    if date_col != "game_date":
+        out = out.drop(columns=[date_col])
     return align_to_schema(out, NFL_COACHES_SCHEMA)

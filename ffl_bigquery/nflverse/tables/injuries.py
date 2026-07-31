@@ -1,18 +1,14 @@
 """injuries: weekly NFL injury reports, 2009-2025 (90,752 rows x 17 cols)."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 
+from ffl_bigquery._schema_samples import read_sample
 from ffl_bigquery._transform_util import align_to_schema
 from ffl_bigquery.nflverse.spec import NflverseTableSpec
 from ffl_bigquery.partition import SeasonRangePartition
 from ffl_bigquery.schema_gen import specs_from_frame
 
-_SAMPLE = Path(__file__).resolve().parents[3] / "tests/fixtures/nflverse/injuries.parquet"
-
-# `season` arrives as Float64 upstream; INTEGER RANGE partitioning requires INT64.
 # `season` AND `week` both arrive as floats upstream. season must be INT64 for
 # INTEGER RANGE partitioning; week must be INT64 because BigQuery refuses FLOAT64
 # as a CLUSTERING key -- "Field week has type FLOAT, which is not supported for
@@ -33,7 +29,7 @@ _ENRICHMENT = {
 }
 
 INJURIES_SCHEMA = specs_from_frame(
-    pd.read_parquet(_SAMPLE), table="injuries",
+    read_sample("injuries"), table="injuries",
     enrichment=_ENRICHMENT, type_overrides=_TYPE_OVERRIDES, required=("season",),
 )
 

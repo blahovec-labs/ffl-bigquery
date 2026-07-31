@@ -7,7 +7,7 @@ Checks 4 and 5 are the ones that catch real defects and are fully wired:
    upstream (see derive/points_weekly.py's module docstring) specifically so
    it becomes a free correctness oracle: recompute full-PPR from
    fantasy_points_standard + receptions and assert it still agrees.
-2. team_scheme_week's charted-metric rates (personnel/coverage/pressure/FTN)
+5. team_scheme_week's charted-metric rates (personnel/coverage/pressure/FTN)
    ship beside their own denominator columns precisely so a 0% or 100%
    sample never reads as a census -- this check enforces the pairing.
 

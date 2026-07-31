@@ -204,7 +204,11 @@ def test_grain_key_is_season_team_role():
 
 
 def test_name_gotchas_carry_the_measured_fill_rate():
+    # 46.2% (473/1,024, full backfill) is the headline figure a user should
+    # see; 37% is kept only as color from an earlier, smaller sample -- both
+    # must be present, but 46.2% is the one that must not go stale.
     name_spec = next(c for c in NFL_COORDINATORS_SCHEMA if c.name == "name")
+    assert any("46.2%" in g for g in name_spec.gotchas)
     assert any("37%" in g for g in name_spec.gotchas)
 
 

@@ -15,17 +15,15 @@ fixture.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import cast
 
 import pandas as pd
 
+from ffl_bigquery._schema_samples import read_sample
 from ffl_bigquery._transform_util import align_to_schema
 from ffl_bigquery.nflverse.spec import NflverseTableSpec
 from ffl_bigquery.partition import SeasonRangePartition
 from ffl_bigquery.schema_gen import specs_from_frame
-
-_SAMPLE = Path(__file__).resolve().parents[3] / "tests/fixtures/nflverse/ftn_charting.parquet"
 
 
 def _num(series: pd.Series) -> pd.Series:
@@ -65,7 +63,7 @@ _ENRICHMENT = {
 }
 
 FTN_CHARTING_SCHEMA = specs_from_frame(
-    pd.read_parquet(_SAMPLE), table="ftn_charting",
+    read_sample("ftn_charting"), table="ftn_charting",
     enrichment=_ENRICHMENT, type_overrides=_TYPE_OVERRIDES, required=("season",),
 )
 

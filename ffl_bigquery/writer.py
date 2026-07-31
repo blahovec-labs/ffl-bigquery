@@ -61,6 +61,25 @@ def coerce_df_for_bq(
     return df
 
 
+class WriteSeasonResult(int):
+    """`int` subclass returned by `write_season`: compares and behaves exactly
+    like the plain `rows written` count every existing caller/test expects
+    (`n == 2`, `rows_written=n`, ...), while also carrying `.dropped` -- the
+    count of rows `write_season` silently discarded because their own
+    `season` didn't match the chunk being written (see that method's
+    docstring). Callers that only care about "how many rows landed" need no
+    changes; callers that want to surface drops (e.g. `run_sync_nflverse`'s
+    summary line) read `.dropped`.
+    """
+
+    dropped: int
+
+    def __new__(cls, written: int, dropped: int) -> WriteSeasonResult:
+        obj = super().__new__(cls, written)
+        obj.dropped = dropped
+        return obj
+
+
 @dataclass(frozen=True)
 class TableRef:
     project: str
@@ -175,8 +194,9 @@ class BigQueryWriter:
         *,
         season: int,
         schema: list[ColumnSpec],
-    ) -> int:
-        """DELETE rows for `season`, then append `df`. Returns rows actually written.
+    ) -> WriteSeasonResult:
+        """DELETE rows for `season`, then append `df`. Returns a
+        `WriteSeasonResult` (an int of rows actually written, plus `.dropped`).
 
         The DELETE runs even when df is empty: a season that legitimately goes
         from N rows to 0 upstream must not leave stale rows behind. This is the
@@ -192,10 +212,16 @@ class BigQueryWriter:
         making the table's contents depend on chunk run order and breaking
         idempotency. So if `df` has a `season` column, rows whose `season`
         disagrees with the chunk argument (or is null, and so can't be placed
-        in any partition) are dropped here rather than written; they are
-        written correctly when their own season's chunk runs. A frame with no
-        `season` column at all is passed through unchanged -- some callers
-        legitimately have none.
+        in any partition) are dropped here rather than written. That is safe
+        ONLY IF the row's own season is also included in this run's requested
+        seasons -- it is then written when that season's own chunk runs. If it
+        is NOT included (e.g. `--seasons 1999-2025` while a boundary row
+        derives season 2026), the row is dropped for good and never appears in
+        the table, silently. The caller is responsible for surfacing
+        `.dropped` (see `nflverse.driver.run_sync_nflverse`'s summary line) --
+        this method only counts and logs a warning, it cannot know the run's
+        full `--seasons` range. A frame with no `season` column at all is
+        passed through unchanged -- some callers legitimately have none.
         """
         bq_schema = to_bq_schema(schema)
         self.client.query(
@@ -208,15 +234,17 @@ class BigQueryWriter:
         ).result()
         if df.empty:
             log.info("season %s of %s is empty; deleted only", season, ref)
-            return 0
+            return WriteSeasonResult(0, 0)
 
         df = coerce_df_for_bq(df, bq_schema)
+        dropped = 0
         if "season" in df.columns:
             is_null = df["season"].isna()
             is_mismatched = ~is_null & (df["season"] != season)
             n_null = int(is_null.sum())
             n_mismatched = int(is_mismatched.sum())
-            if n_null or n_mismatched:
+            dropped = n_null + n_mismatched
+            if dropped:
                 offending = sorted(df.loc[is_mismatched, "season"].unique().tolist())
                 log.warning(
                     "write_season(%s, season=%s): dropping %d row(s) with "
@@ -230,7 +258,7 @@ class BigQueryWriter:
             log.info(
                 "season %s of %s: all rows dropped by season guard", season, ref,
             )
-            return 0
+            return WriteSeasonResult(0, dropped)
         self.client.load_table_from_dataframe(
             df,
             str(ref),
@@ -240,4 +268,4 @@ class BigQueryWriter:
             ),
         ).result()
         log.info("wrote %d rows to %s season=%s", len(df), ref, season)
-        return len(df)
+        return WriteSeasonResult(len(df), dropped)

@@ -17,17 +17,15 @@ Two landmines, both measured 2026-07-29:
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import cast
 
 import pandas as pd
 
+from ffl_bigquery._schema_samples import read_sample
 from ffl_bigquery._transform_util import align_to_schema
 from ffl_bigquery.nflverse.spec import NflverseTableSpec
 from ffl_bigquery.partition import SeasonRangePartition
 from ffl_bigquery.schema_gen import specs_from_frame
-
-_SAMPLE = Path(__file__).resolve().parents[3] / "tests/fixtures/nflverse/participation.parquet"
 
 
 def _num(series: pd.Series) -> pd.Series:
@@ -96,7 +94,7 @@ _ENRICHMENT = {
 
 
 def _schema_sample() -> pd.DataFrame:
-    df = pd.read_parquet(_SAMPLE)
+    df = read_sample("participation")
     game_id = cast(pd.Series, df["nflverse_game_id"])
     return df.assign(season=1999, week=_week_from_game_id(game_id))
 

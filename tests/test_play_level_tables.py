@@ -1,15 +1,12 @@
-from pathlib import Path
-
 import pandas as pd
 
+from ffl_bigquery._schema_samples import read_sample
 from ffl_bigquery.nflverse.tables.ftn_charting import FTN_CHARTING_SPEC
 from ffl_bigquery.nflverse.tables.participation import (
     PARTICIPATION_SPEC,
     season_week_from_game_id,
 )
 from ffl_bigquery.schema import spec_names
-
-FIX = Path(__file__).parent / "fixtures" / "nflverse"
 
 
 def test_play_id_is_int64_on_both_so_bigquery_accepts_it_and_the_join_matches():
@@ -34,7 +31,7 @@ def test_season_week_parsed_from_game_id():
 
 
 def test_participation_derives_season_and_week_since_upstream_has_neither():
-    raw = pd.read_parquet(FIX / "participation.parquet")
+    raw = read_sample("participation")
     out = PARTICIPATION_SPEC.transform(raw, 2023)
     assert list(out.columns) == spec_names(PARTICIPATION_SPEC.schema)
     assert (out["season"] == 2023).all()
@@ -43,7 +40,7 @@ def test_participation_derives_season_and_week_since_upstream_has_neither():
 
 
 def test_ftn_transform_aligns_and_casts():
-    raw = pd.read_parquet(FIX / "ftn_charting.parquet")
+    raw = read_sample("ftn_charting")
     out = FTN_CHARTING_SPEC.transform(raw, 2023)
     assert list(out.columns) == spec_names(FTN_CHARTING_SPEC.schema)
     assert (out["season"] == 2023).all()
@@ -51,7 +48,7 @@ def test_ftn_transform_aligns_and_casts():
 
 
 def test_the_two_tables_join_on_a_common_int_key():
-    p = PARTICIPATION_SPEC.transform(pd.read_parquet(FIX / "participation.parquet"), 2023)
-    f = FTN_CHARTING_SPEC.transform(pd.read_parquet(FIX / "ftn_charting.parquet"), 2023)
+    p = PARTICIPATION_SPEC.transform(read_sample("participation"), 2023)
+    f = FTN_CHARTING_SPEC.transform(read_sample("ftn_charting"), 2023)
     # Same dtype on both sides is the precondition for the join matching at all.
     assert str(p["play_id"].dtype) == str(f["nflverse_play_id"].dtype)
