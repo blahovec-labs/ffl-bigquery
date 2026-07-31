@@ -32,11 +32,35 @@ def build_parser() -> argparse.ArgumentParser:
     sx.add_argument("--xref-table", required=True)
     sx.add_argument("--dry-run", action="store_true")
 
-    vf = sub.add_parser("verify", help="Run ff_adp data-quality checks")
-    vf.add_argument("--season", type=int, required=True)
-    vf.add_argument("--adp-table", required=True)
+    sn = sub.add_parser(
+        "sync-nflverse", help="Sync the nine season-chunked nflverse/derived tables"
+    )
+    sn.add_argument("--seasons", default="latest",
+                    help="e.g. 1999-2025 | 2015,2020 | 2024 | latest")
+    sn.add_argument("--dataset", required=True,
+                    help="project.dataset -- each table lands at project.dataset.<name>")
+    sn.add_argument("--tables", default=None,
+                    help="comma-separated subset of table names; default is all nine")
+    sn.add_argument("--runs-table", default=None)
+    sn.add_argument("--resume", action="store_true")
+    sn.add_argument("--dry-run", action="store_true")
+
+    sr = sub.add_parser("sync-rankings", help="Sync ff_rankings (current ECR snapshot)")
+    sr.add_argument("--rankings-table", required=True, help="project.dataset.ff_rankings")
+
+    vf = sub.add_parser("verify", help="Run ffl-bigquery data-quality checks")
+    vf.add_argument("--checks", default="adp",
+                    help="comma-separated subset of adp,points-weekly,"
+                         "scheme-denominators,participation-coverage")
+    vf.add_argument("--season", type=int, default=None,
+                    help="required by the adp/points-weekly/scheme-denominators checks")
+    vf.add_argument("--adp-table", default=None)
     # Deliberately conservative: gsis_id is 37.9% NULL in ff_playerids upstream.
     vf.add_argument("--min-resolution-rate", type=float, default=0.60)
+    vf.add_argument("--points-weekly-table", default=None)
+    vf.add_argument("--ppr-tolerance", type=float, default=0.01)
+    vf.add_argument("--scheme-week-table", default=None)
+    vf.add_argument("--participation-table", default=None)
 
     return parser
 
@@ -66,12 +90,28 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_sync_xref(ns, bq_client=bigquery.Client())
 
+    if ns.command == "sync-nflverse":
+        from google.cloud import bigquery
+
+        from ffl_bigquery.nflverse.driver import run_sync_nflverse_cli
+
+        return run_sync_nflverse_cli(ns, bq_client=bigquery.Client())
+
+    if ns.command == "sync-rankings":
+        from google.cloud import bigquery
+
+        from ffl_bigquery.nflverse.tables.rankings import sync_ff_rankings
+        from ffl_bigquery.writer import TableRef
+
+        sync_ff_rankings(bigquery.Client(), ref=TableRef.parse(ns.rankings_table))
+        return 0
+
     if ns.command == "verify":
         from google.cloud import bigquery
 
-        from ffl_bigquery.verify.adp import run_verify
+        from ffl_bigquery.verify import run_verify_cli
 
-        return run_verify(ns, bq_client=bigquery.Client())
+        return run_verify_cli(ns, bq_client=bigquery.Client())
 
     parser.print_help()
     return 0

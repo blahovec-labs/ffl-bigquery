@@ -1,9 +1,10 @@
+import argparse
 from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
 
-from ffl_bigquery.nflverse.driver import run_sync_nflverse
+from ffl_bigquery.nflverse.driver import run_sync_nflverse, run_sync_nflverse_cli
 from ffl_bigquery.nflverse.spec import NflverseTableSpec
 from ffl_bigquery.schema import INGESTED_AT_SPEC, ColumnSpec
 from ffl_bigquery.writer import TableRef
@@ -162,3 +163,147 @@ def test_missing_table_ref_raises_before_any_fetch():
                           seasons=[2020], writer=w, runs=r,
                           runs_ref=TableRef.parse("p.d.runs"), table_refs={})
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# run_sync_nflverse_cli: the sync-nflverse CLI orchestration layer -- resolves
+# --dataset/--tables/--seasons into run_sync_nflverse's explicit arguments.
+# ---------------------------------------------------------------------------
+
+
+def _cli_ns(**kw):
+    base = dict(
+        seasons="2020", dataset="p.d", tables=None, runs_table=None,
+        resume=False, dry_run=False,
+    )
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+def test_cli_rejects_a_malformed_dataset():
+    with pytest.raises(ValueError, match="p"):
+        run_sync_nflverse_cli(_cli_ns(dataset="p"), bq_client=MagicMock(),
+                              load_specs=lambda: [_table(name="ff_opportunity")])
+
+
+def test_cli_rejects_an_unknown_table_name():
+    with pytest.raises(ValueError, match="bogus"):
+        run_sync_nflverse_cli(_cli_ns(tables="bogus"), bq_client=MagicMock(),
+                              load_specs=lambda: [_table(name="ff_opportunity")])
+
+
+def test_cli_defaults_to_all_nine_loaded_specs():
+    w, r = MagicMock(), MagicMock()
+    w.write_season.return_value = 1
+    r.completed_chunks.return_value = set()
+    r.record_success.return_value = True
+    names = ["ff_opportunity", "snap_counts", "injuries", "depth_charts",
+             "participation", "ftn_charting", "nfl_coaches",
+             "ff_points_weekly", "team_scheme_week"]
+    run_sync_nflverse_cli(
+        _cli_ns(), bq_client=MagicMock(), writer=w, runs=r,
+        load_specs=lambda: [_table(name=n) for n in names],
+    )
+    # One season requested, nine tables -- nine write_season calls.
+    assert w.write_season.call_count == 9
+
+
+def test_cli_tables_flag_restricts_to_the_requested_subset():
+    w, r = MagicMock(), MagicMock()
+    w.write_season.return_value = 1
+    r.completed_chunks.return_value = set()
+    r.record_success.return_value = True
+    names = ["ff_opportunity", "snap_counts", "injuries"]
+    run_sync_nflverse_cli(
+        _cli_ns(tables="snap_counts"), bq_client=MagicMock(), writer=w, runs=r,
+        load_specs=lambda: [_table(name=n) for n in names],
+    )
+    assert w.write_season.call_count == 1
+
+
+def test_cli_derives_table_refs_from_the_dataset_argument():
+    w, r = MagicMock(), MagicMock()
+    w.write_season.return_value = 1
+    r.completed_chunks.return_value = set()
+    r.record_success.return_value = True
+    run_sync_nflverse_cli(
+        _cli_ns(dataset="myproj.mydata", tables="snap_counts"),
+        bq_client=MagicMock(), writer=w, runs=r,
+        load_specs=lambda: [_table(name="snap_counts")],
+    )
+    ref = w.write_season.call_args[0][0]
+    assert str(ref) == "myproj.mydata.snap_counts"
+
+
+def test_cli_default_runs_table_is_derived_from_the_dataset():
+    w, r = MagicMock(), MagicMock()
+    w.write_season.return_value = 1
+    r.completed_chunks.return_value = set()
+    r.record_success.return_value = True
+    run_sync_nflverse_cli(
+        _cli_ns(dataset="p.d", tables="snap_counts"), bq_client=MagicMock(),
+        writer=w, runs=r, load_specs=lambda: [_table(name="snap_counts")],
+    )
+    runs_ref = r.create_table_if_missing.call_args[0][0]
+    assert str(runs_ref) == "p.d._ffl_nflverse_runs"
+
+
+def test_cli_explicit_runs_table_overrides_the_default():
+    w, r = MagicMock(), MagicMock()
+    w.write_season.return_value = 1
+    r.completed_chunks.return_value = set()
+    r.record_success.return_value = True
+    run_sync_nflverse_cli(
+        _cli_ns(dataset="p.d", tables="snap_counts", runs_table="p.d.custom"),
+        bq_client=MagicMock(), writer=w, runs=r,
+        load_specs=lambda: [_table(name="snap_counts")],
+    )
+    runs_ref = r.create_table_if_missing.call_args[0][0]
+    assert str(runs_ref) == "p.d.custom"
+
+
+def test_cli_seasons_latest_resolves_via_current_season():
+    calls = []
+
+    def loader(season: int) -> pd.DataFrame:
+        calls.append(season)
+        return pd.DataFrame({"season": [season]})
+
+    w, r = MagicMock(), MagicMock()
+    w.write_season.return_value = 1
+    r.completed_chunks.return_value = set()
+    r.record_success.return_value = True
+    run_sync_nflverse_cli(
+        _cli_ns(seasons="latest", tables="snap_counts"), bq_client=MagicMock(),
+        writer=w, runs=r, current_season=2024,
+        load_specs=lambda: [_table(name="snap_counts", loader=loader)],
+    )
+    assert calls == [2024]
+
+
+def test_cli_dry_run_never_touches_the_writer():
+    w, r = MagicMock(), MagicMock()
+    run_sync_nflverse_cli(
+        _cli_ns(dry_run=True, tables="snap_counts"), bq_client=MagicMock(),
+        writer=w, runs=r, load_specs=lambda: [_table(name="snap_counts")],
+    )
+    assert not w.write_season.called
+
+
+def test_cli_resume_is_forwarded_to_the_driver():
+    calls = []
+
+    def loader(season: int) -> pd.DataFrame:
+        calls.append(season)
+        return pd.DataFrame({"season": [season]})
+
+    w, r = MagicMock(), MagicMock()
+    w.write_season.return_value = 1
+    r.completed_chunks.return_value = {("snap_counts", 2020)}
+    r.record_success.return_value = True
+    run_sync_nflverse_cli(
+        _cli_ns(seasons="2020", tables="snap_counts", resume=True),
+        bq_client=MagicMock(), writer=w, runs=r,
+        load_specs=lambda: [_table(name="snap_counts", loader=loader)],
+    )
+    assert calls == []  # already-completed chunk skipped

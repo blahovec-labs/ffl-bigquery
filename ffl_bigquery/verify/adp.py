@@ -112,6 +112,20 @@ def check_snapshot_idempotent(
     )
 
 
+def summarize_results(results: list[CheckResult]) -> int:
+    """Print each result's PASS/FAIL line plus a summary tally.
+
+    Shared by every `verify` check group (see ffl_bigquery.verify.tables) so
+    the report format -- and the "N/M checks passed" tail line -- stays
+    identical no matter which group produced the results.
+    """
+    failed = [r for r in results if not r.passed]
+    for r in results:
+        print(f"[{'PASS' if r.passed else 'FAIL'}] {r.name}: {r.detail}")
+    print(f"\n{len(results) - len(failed)}/{len(results)} checks passed")
+    return 1 if failed else 0
+
+
 def run_verify(ns: argparse.Namespace, *, bq_client) -> int:
     adp_table = str(TableRef.parse(ns.adp_table))
     results = [
@@ -121,8 +135,4 @@ def run_verify(ns: argparse.Namespace, *, bq_client) -> int:
                                      season=ns.season),
         check_snapshot_idempotent(bq_client, adp_table=adp_table, season=ns.season),
     ]
-    failed = [r for r in results if not r.passed]
-    for r in results:
-        print(f"[{'PASS' if r.passed else 'FAIL'}] {r.name}: {r.detail}")
-    print(f"\n{len(results) - len(failed)}/{len(results)} checks passed")
-    return 1 if failed else 0
+    return summarize_results(results)
