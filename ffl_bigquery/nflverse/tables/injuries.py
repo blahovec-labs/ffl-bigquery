@@ -13,7 +13,11 @@ from ffl_bigquery.schema_gen import specs_from_frame
 _SAMPLE = Path(__file__).resolve().parents[3] / "tests/fixtures/nflverse/injuries.parquet"
 
 # `season` arrives as Float64 upstream; INTEGER RANGE partitioning requires INT64.
-_TYPE_OVERRIDES = {"season": "INT64"}
+# `season` AND `week` both arrive as floats upstream. season must be INT64 for
+# INTEGER RANGE partitioning; week must be INT64 because BigQuery refuses FLOAT64
+# as a CLUSTERING key -- "Field week has type FLOAT, which is not supported for
+# clustering" (hit live on 2026-07-30 creating this table).
+_TYPE_OVERRIDES = {"season": "INT64", "week": "INT64"}
 _ENRICHMENT = {
     "season": {"semantic_tags": ["identifier", "partition_key"],
                "business_definition": "NFL season. Cast from the Float64 the "
