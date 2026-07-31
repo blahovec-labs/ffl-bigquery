@@ -109,7 +109,10 @@ def main(argv: list[str] | None = None) -> int:
 
         from ffl_bigquery.nflverse.driver import run_sync_nflverse_cli
 
-        return run_sync_nflverse_cli(ns, bq_client=bigquery.Client())
+        # No client for a dry run -- see run_sync_nflverse_cli.
+        return run_sync_nflverse_cli(
+            ns, bq_client=None if ns.dry_run else bigquery.Client()
+        )
 
     if ns.command == "sync-rankings":
         from google.cloud import bigquery

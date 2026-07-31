@@ -350,3 +350,36 @@ def test_cli_resume_is_forwarded_to_the_driver():
         load_specs=lambda: [_table(name="snap_counts", loader=loader)],
     )
     assert calls == []  # already-completed chunk skipped
+
+
+def test_cli_dry_run_needs_no_bigquery_client_at_all():
+    """A dry run must not require Application Default Credentials.
+
+    Regression: the CLI built bigquery.Client() eagerly, so `--dry-run` raised
+    DefaultCredentialsError on any machine without ADC -- defeating the entire
+    point of a dry run. Caught by the release workflow's wheel smoke test on a
+    runner with no credentials; it passed locally only because the dev machine
+    has ADC configured.
+    """
+    from unittest.mock import MagicMock
+
+    from ffl_bigquery.nflverse.driver import run_sync_nflverse_cli
+
+    ns = MagicMock(dataset="p.d", tables=None, seasons="2023", runs_table=None,
+                   resume=False, dry_run=True)
+    # bq_client=None is the assertion: nothing may touch it.
+    assert run_sync_nflverse_cli(ns, bq_client=None) == 0
+
+
+def test_cli_dry_run_still_validates_tables_before_short_circuiting():
+    """Failing fast on a typo is worth keeping even in dry-run mode."""
+    from unittest.mock import MagicMock
+
+    import pytest as _pytest
+
+    from ffl_bigquery.nflverse.driver import run_sync_nflverse_cli
+
+    ns = MagicMock(dataset="p.d", tables="depth_chartz", seasons="2023",
+                   runs_table=None, resume=False, dry_run=True)
+    with _pytest.raises(ValueError, match="unknown --tables"):
+        run_sync_nflverse_cli(ns, bq_client=None)

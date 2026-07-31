@@ -129,6 +129,19 @@ def run_sync_nflverse_cli(
             f"unknown --tables value(s) {unknown!r}; valid tables are {ALL_TABLE_NAMES!r}"
         )
 
+    # Dry-run returns HERE -- after --dataset/--tables validation (so a typo still
+    # fails fast with the valid list) but BEFORE anything constructs a BigQuery
+    # client. Constructing one requires Application Default Credentials, which a
+    # dry run has no business demanding: the whole point is to check a command
+    # without touching the cloud. Caught by the release workflow's wheel smoke
+    # test, which runs on a runner with no ADC configured.
+    if ns.dry_run:
+        print(
+            f"[dry-run] would sync {len(requested)} table(s) into "
+            f"{project}.{dataset} for seasons {ns.seasons}"
+        )
+        return 0
+
     all_specs = (load_specs or _load_all_specs)()
     specs = [s for s in all_specs if s.name in requested]
     table_refs = {name: TableRef(project, dataset, name) for name in requested}
