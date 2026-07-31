@@ -73,11 +73,30 @@ def test_sync_nflverse_accepts_explicit_seasons_tables_and_flags():
     assert ns.dry_run is True
 
 
-def test_no_sync_coordinators_subcommand():
-    # Task 11 explicitly excludes it -- that table is a later task and does
-    # not exist yet.
+def test_sync_coordinators_requires_seasons_teams_and_table():
     with pytest.raises(SystemExit):
         build_parser().parse_args(["sync-coordinators"])
+
+
+def test_sync_coordinators_parses_args():
+    ns = build_parser().parse_args([
+        "sync-coordinators", "--seasons", "2019-2024", "--teams", "GB,NE",
+        "--coordinators-table", "p.d.nfl_coordinators",
+    ])
+    assert ns.seasons == "2019-2024"
+    assert ns.teams == "GB,NE"
+    assert ns.coordinators_table == "p.d.nfl_coordinators"
+    assert ns.min_interval == 1.0
+    assert ns.dry_run is False
+
+
+def test_sync_coordinators_is_never_the_default_sync_nflverse_path():
+    # Opt-in only: sync-nflverse's --tables validator must not know this name,
+    # so a typo like --tables coordinators fails loudly instead of silently
+    # matching a table that was never meant to run by default.
+    from ffl_bigquery.nflverse.tables import ALL_TABLE_NAMES
+
+    assert "nfl_coordinators" not in ALL_TABLE_NAMES
 
 
 def test_sync_rankings_requires_rankings_table():

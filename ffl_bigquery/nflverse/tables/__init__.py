@@ -14,8 +14,10 @@ for `google.cloud.bigquery`.
 Note: `nfl_coaches`/`ff_points_weekly`/`team_scheme_week` live under
 `ffl_bigquery.coaches`/`ffl_bigquery.derive`, not `ffl_bigquery.nflverse.tables`
 -- this registry aggregates every season-chunked NflverseTableSpec regardless
-of which subpackage defines it. `nfl_coordinators` is deliberately absent:
-that table is a later task and does not exist yet.
+of which subpackage defines it. `nfl_coordinators` (`ffl_bigquery.coordinators`)
+is deliberately absent: it's opt-in only (~37% measured fill; see its schema's
+`name` gotcha), synced via its own `sync-coordinators` CLI command, and never
+part of this registry or `sync-nflverse`.
 """
 from __future__ import annotations
 

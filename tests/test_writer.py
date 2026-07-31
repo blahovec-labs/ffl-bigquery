@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from google.cloud import bigquery
 
-from ffl_bigquery.partition import TimePartition
+from ffl_bigquery.partition import ClusterOnly, TimePartition
 from ffl_bigquery.schema import BqMode, BqType, ColumnSpec
 from ffl_bigquery.writer import (
     BigQueryWriter,
@@ -81,6 +81,22 @@ def test_create_table_if_missing_sets_day_partition_and_clustering():
     table = c.create_table.call_args[0][0]
     assert table.time_partitioning.field == "snapshot_date"
     assert table.clustering_fields == ["season", "source"]
+
+
+def test_create_table_if_missing_clusters_with_no_partitioning_at_all():
+    c = MagicMock(spec=bigquery.Client)
+    c.get_table.side_effect = __import__(
+        "google.cloud.exceptions", fromlist=["NotFound"]
+    ).NotFound("nope")
+    BigQueryWriter(client=c).create_table_if_missing(
+        TableRef.parse("p.d.nfl_coordinators"),
+        [bigquery.SchemaField("season", "INT64"), bigquery.SchemaField("team", "STRING")],
+        ClusterOnly(clustering=["season", "team"]),
+    )
+    table = c.create_table.call_args[0][0]
+    assert table.clustering_fields == ["season", "team"]
+    assert table.time_partitioning is None
+    assert table.range_partitioning is None
 
 
 def test_merge_rows_stages_merges_then_drops():

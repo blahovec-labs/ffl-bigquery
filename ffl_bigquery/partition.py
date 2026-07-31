@@ -13,6 +13,19 @@ class TimePartition:
 
 
 @dataclass(frozen=True)
+class ClusterOnly:
+    """Clustering with no partitioning at all.
+
+    For tables too small to benefit from partition pruning (nfl_coordinators is a
+    few hundred rows at most -- one per sampled (season, team, role)), BigQuery
+    still allows clustering without a partition column. Plain `None` already means
+    "no partitioning, no clustering"; this is the third case those two don't cover.
+    """
+
+    clustering: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class SeasonRangePartition:
     """Integer RANGE partitioning on the `season` column, plus clustering."""
 

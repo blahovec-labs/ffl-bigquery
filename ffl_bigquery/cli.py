@@ -48,6 +48,20 @@ def build_parser() -> argparse.ArgumentParser:
     sr = sub.add_parser("sync-rankings", help="Sync ff_rankings (current ECR snapshot)")
     sr.add_argument("--rankings-table", required=True, help="project.dataset.ff_rankings")
 
+    sc = sub.add_parser(
+        "sync-coordinators",
+        help="Fetch OC/DC from Wikipedia team-season pages (opt-in, ~37%% measured "
+             "fill -- never part of sync-nflverse)",
+    )
+    sc.add_argument("--seasons", required=True, help="e.g. 2019-2024 | 2015,2020 | 2024")
+    sc.add_argument("--teams", required=True,
+                    help="comma-separated team abbreviations, or 'all' for all 32")
+    sc.add_argument("--coordinators-table", required=True,
+                    help="project.dataset.nfl_coordinators")
+    sc.add_argument("--min-interval", type=float, default=1.0,
+                    help="seconds between Wikipedia requests")
+    sc.add_argument("--dry-run", action="store_true")
+
     vf = sub.add_parser("verify", help="Run ffl-bigquery data-quality checks")
     vf.add_argument("--checks", default="adp",
                     help="comma-separated subset of adp,points-weekly,"
@@ -105,6 +119,13 @@ def main(argv: list[str] | None = None) -> int:
 
         sync_ff_rankings(bigquery.Client(), ref=TableRef.parse(ns.rankings_table))
         return 0
+
+    if ns.command == "sync-coordinators":
+        from google.cloud import bigquery
+
+        from ffl_bigquery.coordinators.sync import run_sync_coordinators
+
+        return run_sync_coordinators(ns, bq_client=bigquery.Client())
 
     if ns.command == "verify":
         from google.cloud import bigquery

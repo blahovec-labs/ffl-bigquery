@@ -14,12 +14,12 @@ import pandas as pd
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 
-from ffl_bigquery.partition import SeasonRangePartition, TimePartition
+from ffl_bigquery.partition import ClusterOnly, SeasonRangePartition, TimePartition
 from ffl_bigquery.schema import ColumnSpec, to_bq_schema
 
 log = logging.getLogger(__name__)
 
-Partition = TimePartition | SeasonRangePartition | None
+Partition = TimePartition | SeasonRangePartition | ClusterOnly | None
 
 
 def coerce_df_for_bq(
@@ -116,6 +116,8 @@ class BigQueryWriter:
                     interval=partition.interval,
                 ),
             )
+            table.clustering_fields = partition.clustering or None
+        elif isinstance(partition, ClusterOnly):
             table.clustering_fields = partition.clustering or None
         self.client.create_table(table)
         log.info("created table %s", ref)
