@@ -89,14 +89,17 @@ never published, so there is no 0.0.x history to account for.
   2010–2026 backfill (18,309 `ff_adp` rows): FFC resolves 89.9%, MFL 91.8%; the worst
   legitimate `(source, season)` is MFL 2026 at 63.1%, where unresolved rookies have no
   `gsis_id` yet. `--min-resolution-rate`'s 0.60 default sits just below that floor.
-- **Coordinators are ~37% available.** Measured across 24 sampled team-seasons (6 teams
-  × 2005/2012/2019/2024): head coach 24/24 (already first-class in `nfl_coaches`, per
-  game), each of `off_coach`/`def_coach` 9/24. All six 2005 team-seasons sampled had
-  neither. Pro Football Reference returns HTTP 403 and is unusable, leaving only
-  Wikipedia infoboxes. Hence `nfl_coordinators` is opt-in, never part of
-  `sync-nflverse`. Also: the team-abbreviation → Wikipedia-page-title map uses each
-  franchise's current name, so pre-relocation/rename seasons (Raiders, Chargers, Rams,
-  Commanders) 404 and skew coverage further toward recent seasons.
+- **Coordinators are partially available — 46.2% measured.** A 24-team-season sample
+  (6 teams x 2005/2012/2019/2024) suggested ~37%; the actual 2010-2025 backfill
+  produced **473 rows of a possible 1,024** (16 seasons x 32 teams x 2 roles) =
+  **46.2%**. Head coach, by contrast, was 24/24 in that sample and is already
+  first-class in `nfl_coaches` at per-game grain — only coordinators are sparse.
+  All six 2005 team-seasons sampled had neither coordinator field. Pro Football
+  Reference returns HTTP 403 to automated fetches and is unusable, leaving Wikipedia
+  team-season infoboxes as the only fetchable source. Hence `sync-coordinators` is
+  never part of `sync-nflverse` — it is a separate, explicit, opt-in command. Also:
+  the team-abbreviation to Wikipedia-page-title map uses each franchise's current
+  name, so pre-relocation/rename seasons resolve poorly.
 - **`offense_personnel` is unreliable from 2023 on** — it reports 100% fill while
   carrying defensive players in the offense column (a real 2023 row reads "2 CB, 2 ILB,
   1 OLB, 1 RB, 1 SS, 2 TE, 2 WR"). `team_scheme_week` therefore parses personnel from

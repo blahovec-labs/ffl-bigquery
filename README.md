@@ -51,7 +51,7 @@ you choose to fetch.
 | `nfl_coaches` | 15,096 | 1999–2026 | `sync-nflverse` |
 | `ff_points_weekly` | 476,156 | 1999–2025 | `sync-nflverse` |
 | `team_scheme_week` | 14,546 | 1999–2025 | `sync-nflverse` |
-| `nfl_coordinators` | opt-in, ~37% fill | 2010–2025 (as backfilled) | `sync-coordinators` |
+| `nfl_coordinators` | opt-in, 46.2% measured fill | 2010–2025 (as backfilled) | `sync-coordinators` |
 | `_ffl_ingest_runs` | run log, keyed `(source, season, scoring_format, teams)` | — | `sync-adp` |
 | `_ffl_nflverse_runs` | run log, keyed `(table_name, season)` | — | `sync-nflverse` |
 
@@ -90,16 +90,17 @@ Every one of these was measured against the real feeds, not assumed:
   `(source, season)` is **MFL 2026 at 63.1%** (current-year rookies without a `gsis_id`
   yet). `verify`'s `--min-resolution-rate` defaults to a conservative **0.60**, just below
   that floor.
-- **Coordinators are ~37% available.** Pro Football Reference returns HTTP 403 to
-  automated fetches and is unusable; Wikipedia team-season infoboxes are the only
-  fetchable source found, and even there, across 24 sampled team-seasons (6 teams ×
-  2005/2012/2019/2024), `off_coach`/`def_coach` were populated on only 9/24 (head coach,
-  by contrast, is 24/24 — it's already first-class in `nfl_coaches`, per game). All six
-  2005 team-seasons sampled had neither coordinator field. Hence `sync-coordinators` is
-  never part of `sync-nflverse` — it's a separate, explicit, opt-in command. Also: the
-  team-abbreviation → Wikipedia-page-title map uses each franchise's **current** name, so
-  pre-relocation/rename seasons (Raiders, Chargers, Rams, Commanders) 404 and resolve
-  worse than the recent-season average.
+- **Coordinators are partially available — 46.2% measured.** A 24-team-season sample
+  (6 teams x 2005/2012/2019/2024) suggested ~37%; the actual 2010-2025 backfill
+  produced **473 rows of a possible 1,024** (16 seasons x 32 teams x 2 roles) =
+  **46.2%**. Head coach, by contrast, was 24/24 in that sample and is already
+  first-class in `nfl_coaches` at per-game grain — only coordinators are sparse.
+  All six 2005 team-seasons sampled had neither coordinator field. Pro Football
+  Reference returns HTTP 403 to automated fetches and is unusable, leaving Wikipedia
+  team-season infoboxes as the only fetchable source. Hence `sync-coordinators` is
+  never part of `sync-nflverse` — it is a separate, explicit, opt-in command. Also:
+  the team-abbreviation to Wikipedia-page-title map uses each franchise's current
+  name, so pre-relocation/rename seasons resolve poorly.
 - **`offense_personnel` is unreliable from 2023 on.** It still reports 100% fill for
   2023–2025, but its content changed without notice — a real 2023 row reads
   `"2 CB, 2 ILB, 1 OLB, 1 RB, 1 SS, 2 TE, 2 WR"`, defensive players inside the offense
@@ -147,7 +148,7 @@ got wrong and this backfill corrected (MFL's true start season, and FFC's missin
     # current ECR snapshot -- not season-chunked
     ffl-bigquery sync-rankings --rankings-table PROJECT.DATASET.ff_rankings
 
-    # opt-in, ~37% measured fill -- never part of sync-nflverse
+    # opt-in, 46.2% measured fill -- never part of sync-nflverse
     ffl-bigquery sync-coordinators \
       --coordinators-table PROJECT.DATASET.nfl_coordinators \
       --seasons 2019-2024 --teams all --min-interval 1.0
@@ -202,7 +203,7 @@ Notes:
 - **[MyFantasyLeague](https://www.myfantasyleague.com/)** — historical ADP
   (2011→present) via the free `export?TYPE=adp` endpoint.
 - **Wikipedia** — offensive/defensive coordinator names, via the `action=parse` API
-  against team-season infobox pages (`nfl_coordinators`, opt-in, ~37% fill; see Known
+  against team-season infobox pages (`nfl_coordinators`, opt-in, 46.2% measured fill; see Known
   limitations).
 
 ## Local development (Windows / TLS interception)
