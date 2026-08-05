@@ -33,7 +33,7 @@ Pass `--resume` to skip chunks already recorded `success` or `empty`.
 
 ## What it writes
 
-13 tables plus 2 run logs. Row counts below are measured from a real backfill against
+14 tables plus 2 run logs. Row counts below are measured from a real backfill against
 live BigQuery (not estimates); `nfl_coordinators` is opt-in and its count depends on what
 you choose to fetch.
 
@@ -50,14 +50,15 @@ you choose to fetch.
 | `ftn_charting` | 185,215 | 2022–2025 | `sync-nflverse` |
 | `nfl_coaches` | 15,096 | 1999–2026 | `sync-nflverse` |
 | `ff_points_weekly` | 476,156 | 1999–2025 | `sync-nflverse` |
+| `ff_points_dst_weekly` | — | 1999–2025 | `sync-nflverse` |
 | `team_scheme_week` | 14,546 | 1999–2025 | `sync-nflverse` |
 | `nfl_coordinators` | opt-in, 46.2% measured fill | 2010–2025 (as backfilled) | `sync-coordinators` |
 | `_ffl_ingest_runs` | run log, keyed `(source, season, scoring_format, teams)` | — | `sync-adp` |
 | `_ffl_nflverse_runs` | run log, keyed `(table_name, season)` | — | `sync-nflverse` |
 
-That's ~3.5M rows across the twelve non-opt-in tables. Nine of the thirteen
+That's ~3.5M rows across the thirteen non-opt-in tables. Ten of the fourteen
 (`ff_opportunity`, `snap_counts`, `injuries`, `depth_charts`, `participation`,
-`ftn_charting`, `nfl_coaches`, `ff_points_weekly`, `team_scheme_week`) share one driver —
+`ftn_charting`, `nfl_coaches`, `ff_points_weekly`, `ff_points_dst_weekly`, `team_scheme_week`) share one driver —
 `sync-nflverse` — because they're all the same shape: load a frame for season *S*, align
 it to a schema, replace that season. `ff_adp` and `nfl_coordinators` are chunked
 differently (by source/format and by team-season respectively) because their upstreams

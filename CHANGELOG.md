@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.0 — 2026-08-05
+
+Team-defense fantasy scoring. `ff_points_weekly` covers players only (it derives from
+`load_player_stats()`), so a fantasy DST slot previously had no scoreable outcome at all —
+measured 2026-07-31, the ADP board carries 12 `DEF` entries per season against zero rows to
+join them to.
+
+### Added
+
+- `ff_points_dst_weekly` — weekly team-defense fantasy points at `(season, week, team)` grain,
+  derived from `load_pbp()` event flags plus `load_schedules()` final scores. Registered as the
+  tenth season-chunked table, so it syncs through the existing `sync-nflverse` command rather
+  than a command of its own. Every scored component ships beside its own raw count column, so a
+  league with different rules re-derives totals from this table instead of re-deriving the table.
+- `verify --checks dst` — two guards. **Arithmetic:** `fantasy_points_dst` must equal the sum
+  of the components it publishes, catching a scoring weight changed in one place and not the
+  other, which no schema test can see. **Coverage:** every `DEF` on the ADP board must have
+  DST rows for that season — the exact failure this table exists to prevent, and the one that
+  franchise relocations (SD→LAC, STL→LAR, OAK→LV) would otherwise produce silently as a
+  defense scoring zero every week. The coverage half needs `--adp-table` and announces itself
+  as SKIPPED when it is absent, rather than reporting a clean run it did not perform.
+
+### Derivation notes
+
+- **Touchdowns are credited by `td_team`, never `defteam`.** On a pick-six the scoring team is
+  the defense, but on a punt-return touchdown the returning team was the *receiving* team on
+  that play — `defteam` gets exactly one of those two cases wrong.
+- **Fumble recoveries use `fumble_recovery_1_team`, not `fumble_lost` credited to `defteam`.**
+  `fumble_lost` is an offensive stat that only *implies* a defensive recovery, and it gets the
+  awkward cases wrong (muffed punts, an offense recovering its own fumble, fumbles on a change
+  of possession).
+- **The row set comes from the schedule, not from events.** A defense that records nothing
+  still played and still earns its points-allowed bonus; deriving rows from events would drop
+  it, making a quiet game indistinguishable from a bye.
+- **`points_allowed_bonus` is NULL — never 0 — when the final score is unresolvable.**
+  Defaulting to 0 would award a +10 shutout bonus to every gap and look like real data.
+
+### Known limitations
+
+- **`points_allowed_total` is the opponent's TOTAL final score**, deliberately not net of
+  points the opponent's own defense or special teams scored against our offense. Some league
+  rules exclude those; most public ones do not. The simplification is named in the column
+  rather than hidden.
+- Regular season only (`game_type = 'REG'`).
+
 ## 0.1.0 — 2026-07-30
 
 Initial release: the fantasy layer on top of `nfl-bigquery`. 13 tables plus 2 run logs,
