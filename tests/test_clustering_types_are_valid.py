@@ -91,3 +91,13 @@ def test_partition_key_is_int64_when_range_partitioned(spec):
         f"{spec.name}: RANGE partition key {part.field!r} must be INT64, got "
         f"{by_name.get(part.field)}"
     )
+
+
+def test_all_specs_covers_every_registered_spec():
+    """ALL_SPECS is hand-maintained and NOT derived from load_all_specs(), so a
+    newly registered table is invisible to this guard until someone adds it here.
+    That already happened once. This asserts it cannot happen silently again."""
+    from ffl_bigquery.nflverse.tables import load_all_specs
+    registered = {s.name for s in load_all_specs()}
+    guarded = {s.name for s in ALL_SPECS}
+    assert registered <= guarded, f"unguarded specs: {sorted(registered - guarded)}"

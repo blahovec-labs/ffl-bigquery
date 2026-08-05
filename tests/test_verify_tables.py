@@ -241,6 +241,12 @@ def test_run_verify_cli_participation_coverage_without_its_table_raises():
         run_verify_cli(ns, bq_client=MagicMock())
 
 
+def test_run_verify_cli_dst_without_its_table_raises():
+    ns = argparse.Namespace(checks="dst", dst_table=None)
+    with pytest.raises(ValueError, match="dst-table"):
+        run_verify_cli(ns, bq_client=MagicMock())
+
+
 def test_run_verify_cli_dispatches_to_adp_by_default(monkeypatch):
     calls = []
 

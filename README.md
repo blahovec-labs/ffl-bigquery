@@ -139,7 +139,7 @@ got wrong and this backfill corrected (MFL's true start season, and FFC's missin
 
     ffl-bigquery sync-xref --xref-table PROJECT.DATASET.ff_player_xref
 
-    # the nine season-chunked nflverse/derived tables, one dataset, one command
+    # the ten season-chunked nflverse/derived tables, one dataset, one command
     ffl-bigquery sync-nflverse --dataset PROJECT.DATASET --seasons 1999-2025 --resume
 
     # a subset, if you only want a few
@@ -161,6 +161,8 @@ got wrong and this backfill corrected (MFL's true start season, and FFC's missin
       --scheme-week-table PROJECT.DATASET.team_scheme_week
     ffl-bigquery verify --checks participation-coverage \
       --participation-table PROJECT.DATASET.participation
+    ffl-bigquery verify --checks dst --dst-table PROJECT.DATASET.ff_points_dst_weekly \
+      --adp-table PROJECT.DATASET.ff_adp
 
 Notes:
 
@@ -168,7 +170,7 @@ Notes:
   upstream source degrades coverage instead of aborting the run; `--resume` skips chunks
   already recorded `success` or `empty` in `_ffl_ingest_runs`.
 - `sync-nflverse` derives each table's ref as `project.dataset.<name>` from a single
-  `--dataset` — no per-table flags needed. `--tables` defaults to all nine and is
+  `--dataset` — no per-table flags needed. `--tables` defaults to all ten and is
   validated against the known registry before any fetch, so a typo fails fast. Its
   `--resume` reads `_ffl_nflverse_runs`, a second run log keyed `(table_name, season)`
   — deliberately separate from ADP's `(source, season, scoring_format, teams)` log rather
@@ -185,7 +187,7 @@ Notes:
   spacing backing FFC's "do not poll frequently" terms and general politeness toward
   Wikipedia's API; see Data sources & attribution below.
 - `verify --checks` accepts a comma-separated subset of `adp`, `points-weekly`,
-  `scheme-denominators`, `participation-coverage`. Each group validates its own required
+  `scheme-denominators`, `participation-coverage`, `dst`. Each group validates its own required
   flags at dispatch time (e.g. `scheme-denominators` needs `--scheme-week-table` and
   `--season`) rather than making every flag globally required. `--min-resolution-rate`
   (default `0.60`) and `--ppr-tolerance` (default `0.01`) are the two numeric knobs.
@@ -195,8 +197,8 @@ Notes:
 ## Data sources & attribution
 
 - **nflverse** via [`nflreadpy`](https://nflreadpy.nflverse.com/) — player IDs, usage,
-  snap counts, injuries, depth charts, participation, FTN charting, schedules/coaches, and
-  weekly player stats.
+  snap counts, injuries, depth charts, participation, FTN charting, schedules/coaches,
+  play-by-play, and weekly player stats.
 - **[Fantasy Football Calculator](https://fantasyfootballcalculator.com/)** — historical
   ADP (2010→present, no 2025). Their ADP REST API is free for personal and commercial use;
   this project provides attribution as requested. Data updates once daily — do not poll

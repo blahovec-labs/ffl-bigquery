@@ -33,14 +33,14 @@ def build_parser() -> argparse.ArgumentParser:
     sx.add_argument("--dry-run", action="store_true")
 
     sn = sub.add_parser(
-        "sync-nflverse", help="Sync the nine season-chunked nflverse/derived tables"
+        "sync-nflverse", help="Sync the ten season-chunked nflverse/derived tables"
     )
     sn.add_argument("--seasons", default="latest",
                     help="e.g. 1999-2025 | 2015,2020 | 2024 | latest")
     sn.add_argument("--dataset", required=True,
                     help="project.dataset -- each table lands at project.dataset.<name>")
     sn.add_argument("--tables", default=None,
-                    help="comma-separated subset of table names; default is all nine")
+                    help="comma-separated subset of table names; default is all ten")
     sn.add_argument("--runs-table", default=None)
     sn.add_argument("--resume", action="store_true")
     sn.add_argument("--dry-run", action="store_true")
