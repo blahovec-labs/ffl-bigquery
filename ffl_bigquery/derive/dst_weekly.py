@@ -27,6 +27,8 @@ from ffl_bigquery.derive.dst_scoring import (
     TOUCHDOWN_POINTS,
     points_allowed_bonus,
 )
+from ffl_bigquery.nflverse.spec import NflverseTableSpec
+from ffl_bigquery.partition import SeasonRangePartition
 from ffl_bigquery.schema import INGESTED_AT_SPEC, ColumnSpec
 
 
@@ -280,3 +282,32 @@ def derive_dst_weekly(
         pd.to_numeric(merged["week"], errors="coerce").astype("Int64"),  # type: ignore[union-attr]
     )
     return align_to_schema(merged, FF_POINTS_DST_WEEKLY_SCHEMA)
+
+
+def _load(season: int) -> pd.DataFrame:
+    import nflreadpy as nfl
+
+    return nfl.load_pbp(seasons=[season]).to_pandas()
+
+
+def _transform(pbp: pd.DataFrame, season: int) -> pd.DataFrame:
+    """NflverseTableSpec's contract is a single (df, season) -> df transform,
+    but points allowed needs authoritative final scores, which live in
+    load_schedules() and not in the play-by-play. Rather than bend the driver,
+    this transform fetches schedules itself -- the same posture
+    SCHEME_WEEK_SPEC's transform takes for its three extra sources.
+    """
+    import nflreadpy as nfl
+
+    schedules = nfl.load_schedules(seasons=[season]).to_pandas()
+    return derive_dst_weekly(pbp, schedules, season)
+
+
+DST_WEEKLY_SPEC = NflverseTableSpec(
+    name="ff_points_dst_weekly",
+    loader=_load,
+    schema=FF_POINTS_DST_WEEKLY_SCHEMA,
+    partition=SeasonRangePartition(clustering=["week", "team"]),
+    transform=_transform,
+    min_season=1999,
+)
