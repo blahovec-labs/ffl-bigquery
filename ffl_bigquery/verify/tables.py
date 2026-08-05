@@ -218,3 +218,115 @@ def run_verify_participation_coverage(ns: argparse.Namespace, *, bq_client) -> i
     table = str(TableRef.parse(ns.participation_table))
     result = check_participation_coverage_matrix(bq_client, participation_table=table)
     return summarize_results([result])
+
+
+def check_dst_components_reconcile(rows) -> list[str]:
+    """fantasy_points_dst must equal the sum of the components it publishes.
+
+    This is the one DST invariant a schema test cannot express: it catches a
+    scoring weight changed in the transform but not in dst_scoring (or vice
+    versa), which would otherwise ship a table whose total silently disagrees
+    with its own count columns. Imports the weights from dst_scoring rather
+    than hardcoding them, so a weight change cannot drift between the
+    transform and this verifier.
+    """
+    from ffl_bigquery.derive.dst_scoring import (
+        BLOCKED_KICK_POINTS,
+        FUMBLE_RECOVERY_POINTS,
+        INTERCEPTION_POINTS,
+        SACK_POINTS,
+        SAFETY_POINTS,
+        TOUCHDOWN_POINTS,
+    )
+
+    findings: list[str] = []
+    for r in rows:
+        bonus = r.points_allowed_bonus
+        if bonus is None:
+            # Unresolvable final score -- a coverage gap, not an arithmetic
+            # error. Reporting it here would bury real findings in noise.
+            continue
+        expected = (
+            (r.sacks or 0) * SACK_POINTS
+            + (r.interceptions or 0) * INTERCEPTION_POINTS
+            + (r.fumble_recoveries or 0) * FUMBLE_RECOVERY_POINTS
+            + (r.safeties or 0) * SAFETY_POINTS
+            + (r.defensive_tds or 0) * TOUCHDOWN_POINTS
+            + (r.blocked_kicks or 0) * BLOCKED_KICK_POINTS
+            + bonus
+        )
+        actual = r.fantasy_points_dst
+        if actual is None or abs(float(actual) - float(expected)) > 1e-6:
+            findings.append(
+                f"{r.season} wk{r.week} {r.team}: fantasy_points_dst={actual} "
+                f"but components sum to {expected}"
+            )
+    return findings
+
+
+def check_dst_covers_adp_defenses(rows) -> list[str]:
+    """Every team defense on the ADP board must have DST rows for that season.
+
+    This is the coverage guard for the exact bug this table was built to kill:
+    a drafted DEF with nothing to score against. It also catches franchise
+    relocations (SD->LAC, STL->LAR, OAK->LV), where an ADP board naming a team
+    by its pre-move abbreviation silently yields a defense that scores zero
+    every week instead of raising anything.
+    """
+    return [
+        f"{r.season} {r.team}: on the ADP board but has 0 ff_points_dst_weekly rows"
+        for r in rows
+        if not (r.dst_weeks or 0)
+    ]
+
+
+def run_verify_dst(ns: argparse.Namespace, *, bq_client) -> int:
+    """Runs both DST guards: arithmetic reconciliation always, ADP coverage
+    only when --adp-table is given. The coverage half prints an explicit
+    SKIPPED line rather than being silently omitted -- a check that omits
+    half its work while printing "0 findings" reads exactly like a pass,
+    which has already cost real debugging time on this project.
+    """
+    dst_table = str(TableRef.parse(ns.dst_table))
+    sql = f"""
+        SELECT season, week, team, sacks, interceptions, fumble_recoveries,
+               safeties, defensive_tds, blocked_kicks, points_allowed_bonus,
+               fantasy_points_dst
+        FROM `{dst_table}`
+    """
+    rows = list(bq_client.query(sql).result())
+    findings = check_dst_components_reconcile(rows)
+    for f in findings:
+        print(f"[dst] {f}")
+    print(f"[dst] {len(findings)} arithmetic finding(s) across {len(rows)} row(s)")
+
+    coverage_findings: list[str] = []
+    if ns.adp_table:
+        adp_table = str(TableRef.parse(ns.adp_table))
+        coverage_sql = f"""
+            SELECT a.season, a.team,
+                   COUNT(DISTINCT d.week) AS dst_weeks
+            FROM (
+              SELECT DISTINCT season, team
+              FROM `{adp_table}`
+              WHERE position IN ('DEF', 'DST') AND team IS NOT NULL
+            ) a
+            LEFT JOIN `{dst_table}` d
+              ON d.season = a.season AND d.team = a.team
+            GROUP BY a.season, a.team
+        """
+        coverage_rows = list(bq_client.query(coverage_sql).result())
+        coverage_findings = check_dst_covers_adp_defenses(coverage_rows)
+        for f in coverage_findings:
+            print(f"[dst] {f}")
+        print(
+            f"[dst] {len(coverage_findings)} coverage finding(s) across "
+            f"{len(coverage_rows)} drafted (season, team) defense(s)"
+        )
+    else:
+        # Fails VISIBLY rather than silently reporting a clean run -- a check
+        # that skips its own coverage half while printing "0 findings" reads
+        # exactly like a pass.
+        print("[dst] coverage check SKIPPED (no --adp-table given)")
+
+    return 1 if (findings or coverage_findings) else 0

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 
-CHECK_GROUPS = ("adp", "points-weekly", "scheme-denominators", "participation-coverage")
+CHECK_GROUPS = (
+    "adp", "points-weekly", "scheme-denominators", "participation-coverage", "dst",
+)
 
 
 def run_verify_cli(ns: argparse.Namespace, *, bq_client) -> int:
@@ -56,5 +58,11 @@ def run_verify_cli(ns: argparse.Namespace, *, bq_client) -> int:
         any_failed = (
             run_verify_participation_coverage(ns, bq_client=bq_client) != 0 or any_failed
         )
+
+    if "dst" in checks:
+        if not ns.dst_table:
+            raise ValueError("--checks dst requires --dst-table")
+        from ffl_bigquery.verify.tables import run_verify_dst
+        any_failed = run_verify_dst(ns, bq_client=bq_client) != 0 or any_failed
 
     return 1 if any_failed else 0

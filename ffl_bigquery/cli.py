@@ -65,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     vf = sub.add_parser("verify", help="Run ffl-bigquery data-quality checks")
     vf.add_argument("--checks", default="adp",
                     help="comma-separated subset of adp,points-weekly,"
-                         "scheme-denominators,participation-coverage")
+                         "scheme-denominators,participation-coverage,dst")
     vf.add_argument("--season", type=int, default=None,
                     help="required by the adp/points-weekly/scheme-denominators checks")
     vf.add_argument("--adp-table", default=None)
@@ -75,6 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     vf.add_argument("--ppr-tolerance", type=float, default=0.01)
     vf.add_argument("--scheme-week-table", default=None)
     vf.add_argument("--participation-table", default=None)
+    vf.add_argument("--dst-table", default=None,
+                    help="project.dataset.ff_points_dst_weekly")
 
     return parser
 
