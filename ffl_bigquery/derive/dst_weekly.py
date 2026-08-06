@@ -57,7 +57,10 @@ FF_POINTS_DST_WEEKLY_SCHEMA: list[ColumnSpec] = [
     _c("team", "STRING", "NULLABLE", "Team abbreviation of the DEFENSE.",
        "The team whose defense/special teams accumulated this row. Note this is "
        "the defending team, not the possessing offense -- the raw play-by-play "
-       "is offense-oriented and had to be re-attributed.",
+       "is offense-oriented and had to be re-attributed. That re-attribution is "
+       "per EVENT, not per play: nflverse's posteam/defteam orientation is "
+       "inverted between punts and kickoffs, so no single upstream column means "
+       "'this row's team' (see _event_counts).",
        ["identifier", "cluster_key", "dimension"]),
     _c("opponent", "STRING", "NULLABLE", "Opponent team abbreviation.",
        "The offense this defense faced. Its final score is points_allowed_total.",
@@ -83,7 +86,13 @@ FF_POINTS_DST_WEEKLY_SCHEMA: list[ColumnSpec] = [
         "to defteam. fumble_lost is an offensive stat and only implies a "
         "defensive recovery; it gets the awkward cases wrong (muffed punts, an "
         "offense recovering its own fumble, fumbles on a change of possession). "
-        "fumble_recovery_1_team names who actually ended up with the ball."],
+        "fumble_recovery_1_team names who actually ended up with the ball.",
+        "Counted only when fumble_recovery_1_team differs from fumbled_1_team "
+        "-- i.e. a genuine change of possession. Testing recovery against "
+        "defteam instead is wrong in BOTH directions on punts, where posteam "
+        "is the PUNTING team: measured on 2024 REG, it dropped 23 muffed punts "
+        "recovered by the punting team, and wrongly credited 22 muffs the "
+        "receiving team recovered itself (no change of possession at all)."],
        "fumble_recovery_1_team"),
     _c("safeties", "INT64", "NULLABLE", "Safeties recorded.",
        "Count of safeties credited to this defense. Worth 2 points each. Rare: "
@@ -93,10 +102,16 @@ FF_POINTS_DST_WEEKLY_SCHEMA: list[ColumnSpec] = [
        "Count of touchdowns scored by this team while it was on defense or "
        "special teams. Worth 6 points each.",
        ["metric"],
-       ["Credited by td_team, NOT by defteam. On a pick-six the scoring team is "
-        "the defense, but on a punt-return touchdown the returning team was the "
-        "receiving team on that play -- defteam gets exactly one of those two "
-        "cases wrong. td_team is the only column that answers 'who scored'."],
+       ["Credited by td_team, NOT by defteam. td_team is the only column that "
+        "answers 'who scored'. Requiring td_team == defteam silently drops "
+        "every KICKOFF-return touchdown, because on a kickoff the returning "
+        "team is posteam, not defteam: measured on 2024 REG, 8 of 64 "
+        "defensive/special-teams touchdowns were dropped, including all 7 "
+        "kickoff-return TDs.",
+        "Equally, td_team != posteam is NOT the right filter either -- it "
+        "drops the same kickoff returns. The rule is 'everything except an "
+        "offensive scrimmage touchdown': credit td_team unless the scoring "
+        "team was posteam on a play that is not a kickoff or punt."],
        "td_team"),
     _c("blocked_kicks", "INT64", "NULLABLE", "Kicks blocked.",
        "Count of blocked field goals, extra points, and punts credited to this "
@@ -121,7 +136,15 @@ FF_POINTS_DST_WEEKLY_SCHEMA: list[ColumnSpec] = [
        "Sum of every scored component: sacks*1 + interceptions*2 + "
        "fumble_recoveries*2 + safeties*2 + defensive_tds*6 + blocked_kicks*2 + "
        "points_allowed_bonus. FLOAT64 to match ff_points_weekly's fantasy-point "
-       "columns, so a UNION across the two needs no cast.", ["metric"]),
+       "columns, so a UNION across the two needs no cast. Note the two tables "
+       "do NOT cover the same weeks: ff_points_weekly includes postseason, "
+       "this table is regular season only, so a UNION must filter week ranges "
+       "rather than assume they align.", ["metric"],
+       ["NULL -- never 0 -- whenever points_allowed_bonus is NULL. A resolved "
+        "0.0 would read as 'this defense scored nothing', which is exactly "
+        "wrong for a week that has not been played yet: a mid-season "
+        "`sync-nflverse --seasons latest` sees all 18 scheduled weeks from "
+        "load_schedules() but only the played ones from load_pbp()."]),
     INGESTED_AT_SPEC,
 ]
 
@@ -178,33 +201,106 @@ def _team_game_rows(schedules: pd.DataFrame, season: int) -> pd.DataFrame:
     return out
 
 
-def _event_counts(pbp: pd.DataFrame) -> pd.DataFrame:
-    """Per (game_id, defending team) counts of each scoring event."""
-    if pbp.empty or "defteam" not in pbp.columns:
-        return pd.DataFrame(columns=["game_id", "team", *_COUNT_COLUMNS])  # type: ignore[arg-type]
+# nflverse's posteam/defteam orientation is NOT consistent across play types:
+#
+#   play type      posteam            defteam
+#   ------------   ----------------   ----------------
+#   run / pass     offense            defense
+#   punt           punting team       receiving team
+#   kickoff        RECEIVING team     KICKING team
+#
+# Punt and kickoff are INVERTED relative to each other, so there is no single
+# column that means "the team whose defense/special teams made this play".
+# Grouping every event on defteam therefore gets special teams wrong in both
+# directions -- it silently dropped all 7 kickoff-return TDs and 23 muffed
+# punts recovered by the punting team in 2024 REG alone. Each event below is
+# aggregated by the team it should actually be CREDITED to, and the per-event
+# frames are combined at the end.
+_SPECIAL_TEAMS_PLAY_TYPES = ("kickoff", "punt")
 
-    df = pbp.copy()
-    df["_sack"] = _flag(df, "sack")
-    df["_interception"] = _flag(df, "interception")
-    df["_safety"] = _flag(df, "safety")
 
-    # Fumble recovery is credited by who ACTUALLY recovered, not inferred from
-    # the offense's fumble_lost flag -- see the fumble_recoveries column gotcha.
-    rec_team = df["fumble_recovery_1_team"] if "fumble_recovery_1_team" in df else None
-    df["_fumble"] = (
-        (rec_team.notna() & (rec_team == df["defteam"])).astype("int64")
-        if rec_team is not None else 0
+def _bool(s: pd.Series) -> pd.Series:
+    """A possibly-nullable boolean Series as a plain numpy bool Series.
+
+    Comparisons against pandas "string"-dtype columns return nullable booleans
+    (three-valued logic), and an <NA> anywhere in a boolean mask makes
+    DataFrame.loc raise. <NA> here can only mean "the upstream column did not
+    say", which for every predicate in this module means "no, don't credit it".
+    """
+    return cast(pd.Series, s.fillna(False).astype(bool))
+
+
+def _dst_touchdown_mask(df: pd.DataFrame) -> pd.Series:
+    """Plays whose touchdown should be credited to a DST, by td_team.
+
+    The rule is "every touchdown except an offensive scrimmage touchdown":
+    credit td_team unless the scoring team was posteam on a play that is
+    neither a kickoff nor a punt. Measured against real nflverse data:
+
+    * 2024 REG -- 64 credited (36 pass, 10 punt, 8 run, 7 kickoff, 3 field
+      goal). Requiring td_team == defteam credits only 56, dropping all 7
+      kickoff-return TDs plus one punt TD scored by the punting team.
+      td_team != posteam also credits only 56, for the same kickoff reason.
+    * 2010 REG -- 118 credited, of which 23 are kickoff returns by posteam.
+
+    The kickoff/punt carve-out is deliberately narrower than "not a run or
+    pass". `play_type` is NULL on plays carrying a between-downs penalty, and
+    in 1999 REG that is 8 touchdowns -- 6 of them ordinary offensive run/pass
+    scores. Excluding posteam TDs by default and re-admitting only the two
+    play types where posteam is the special-teams side gets those 6 right,
+    while returning an identical answer to the run/pass phrasing on every
+    season where play_type is populated.
+    """
+    scored = _flag(df, "touchdown").astype(bool)
+    if "td_team" not in df.columns:
+        return pd.Series(False, index=df.index)
+    scored = scored & df["td_team"].notna()
+
+    posteam = (
+        df["posteam"] if "posteam" in df.columns
+        else pd.Series(pd.NA, index=df.index, dtype="object")
     )
+    scored_by_posteam = _bool(df["td_team"] == posteam)
 
-    # Touchdowns are credited by td_team, never by defteam -- defteam is wrong
-    # for return TDs. See the defensive_tds column gotcha.
-    td_team = df["td_team"] if "td_team" in df else None
-    df["_td"] = (
-        (_flag(df, "touchdown").astype(bool) & td_team.notna()
-         & (td_team == df["defteam"])).astype("int64")
-        if td_team is not None else 0
-    )
+    if "play_type" in df.columns:
+        # cast: DataFrame.__getitem__ is typed as DataFrame | Series, so
+        # .isin() widens to DataFrame in the stubs (same gap as _flag()).
+        play_type = cast(pd.Series, df["play_type"])
+        special = _bool(cast(pd.Series, play_type.isin(_SPECIAL_TEAMS_PLAY_TYPES)))
+    else:
+        special = pd.Series(False, index=df.index)
 
+    return _bool(scored & (~scored_by_posteam | special))
+
+
+def _fumble_recovery_mask(df: pd.DataFrame) -> pd.Series:
+    """Plays where a fumble changed possession, creditable to the recoverer.
+
+    Credit belongs to fumble_recovery_1_team whenever it differs from
+    fumbled_1_team -- that difference IS the change of possession. Comparing
+    the recoverer to defteam instead is wrong in both directions on punts,
+    where posteam is the punting team: on 2024 REG it dropped 23 muffed punts
+    recovered by the punting team and wrongly credited 22 muffs the receiving
+    team recovered itself (no change of possession, so no fantasy credit).
+
+    fumbled_1_team is published by nflverse for every season this table covers
+    -- verified present and non-null on all 739 (1999) and 576 (2024) plays
+    with a recorded fumble_recovery_1_team. If a future vintage drops it, the
+    mask degrades to the pre-fix "recovered by defteam" behaviour, which is
+    wrong on punts but never credits an offense its own recovery.
+    """
+    if "fumble_recovery_1_team" not in df.columns:
+        return pd.Series(False, index=df.index)
+    rec = df["fumble_recovery_1_team"]
+    if "fumbled_1_team" in df.columns:
+        fumbled = df["fumbled_1_team"]
+        return _bool(rec.notna() & fumbled.notna() & (rec != fumbled))
+    if "defteam" not in df.columns:
+        return pd.Series(False, index=df.index)
+    return _bool(rec.notna() & (rec == df["defteam"]))
+
+
+def _blocked_kick_flag(df: pd.DataFrame) -> pd.Series:
     blocked = pd.Series(False, index=df.index)
     for col in ("field_goal_result", "extra_point_result"):
         if col in df.columns:
@@ -219,20 +315,84 @@ def _event_counts(pbp: pd.DataFrame) -> pd.DataFrame:
             blocked = blocked | (df[col].astype("string") == "blocked").fillna(False)
     if "punt_blocked" in df.columns:
         blocked = blocked | _flag(df, "punt_blocked").astype(bool)
-    df["_blocked"] = blocked.astype("int64")
+    return cast(pd.Series, blocked.astype("int64"))
 
+
+def _counts_by(
+    df: pd.DataFrame, team_col: str, rename: dict[str, str],
+) -> pd.DataFrame:
+    """Sum `rename`'s flag columns per (game_id, <team_col>), publishing the
+    result under the schema's count-column names with the crediting team in a
+    uniform `team` column."""
+    published = ["game_id", "team", *rename.values()]
+    if df.empty or team_col not in df.columns or "game_id" not in df.columns:
+        return pd.DataFrame(columns=published)  # type: ignore[arg-type]
     grouped = (
-        df.groupby(["game_id", "defteam"], dropna=True)[
-            ["_sack", "_interception", "_fumble", "_safety", "_td", "_blocked"]
-        ]
+        df.groupby(["game_id", team_col], dropna=True)[list(rename)]
         .sum()
         .reset_index()
     )
-    return grouped.rename(columns={
-        "defteam": "team", "_sack": "sacks", "_interception": "interceptions",
-        "_fumble": "fumble_recoveries", "_safety": "safeties",
-        "_td": "defensive_tds", "_blocked": "blocked_kicks",
-    })
+    return grouped.rename(columns={team_col: "team", **rename})
+
+
+def _event_counts(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Per (game_id, crediting team) counts of each scoring event.
+
+    NOT a single groupby on defteam -- see _SPECIAL_TEAMS_PLAY_TYPES above for
+    why that is unsound. Sacks, interceptions, safeties and blocked kicks are
+    aggregated by defteam because they occur only on plays where the
+    offense/defense orientation is unambiguous; touchdowns are aggregated by
+    td_team and fumble recoveries by fumble_recovery_1_team.
+
+    Known theoretical exception: a SAFETY scored on a punt play would be
+    credited to defteam, i.e. to the receiving team rather than the punting
+    team's coverage unit. There are zero such plays in 2024 REG -- all 15
+    safeties that season are run/pass/no_play -- so the behaviour is left
+    alone and documented rather than special-cased against no evidence.
+    """
+    empty = pd.DataFrame(columns=["game_id", "team", *_COUNT_COLUMNS])  # type: ignore[arg-type]
+    if pbp.empty or "game_id" not in pbp.columns:
+        return empty
+
+    df = pbp.copy()
+    frames: list[pd.DataFrame] = []
+
+    if "defteam" in df.columns:
+        df["_sack"] = _flag(df, "sack")
+        df["_interception"] = _flag(df, "interception")
+        df["_safety"] = _flag(df, "safety")
+        df["_blocked"] = _blocked_kick_flag(df)
+        frames.append(_counts_by(df, "defteam", {
+            "_sack": "sacks", "_interception": "interceptions",
+            "_safety": "safeties", "_blocked": "blocked_kicks",
+        }))
+
+    tds = df.loc[_dst_touchdown_mask(df)].copy()
+    tds["_td"] = 1
+    frames.append(_counts_by(tds, "td_team", {"_td": "defensive_tds"}))
+
+    fumbles = df.loc[_fumble_recovery_mask(df)].copy()
+    fumbles["_fumble"] = 1
+    frames.append(_counts_by(
+        fumbles, "fumble_recovery_1_team", {"_fumble": "fumble_recoveries"},
+    ))
+
+    combined = pd.concat(frames, ignore_index=True)
+    if combined.empty:
+        return empty
+    for col in _COUNT_COLUMNS:
+        if col not in combined.columns:
+            combined[col] = 0
+        # Same pandas-stub gap as _flag() above -- cast to silence pyright.
+        combined[col] = cast(
+            pd.Series,
+            pd.to_numeric(combined[col], errors="coerce").fillna(0).astype("int64"),  # type: ignore[union-attr]
+        )
+    return (
+        combined.groupby(["game_id", "team"], dropna=True)[_COUNT_COLUMNS]
+        .sum()
+        .reset_index()
+    )
 
 
 def derive_dst_weekly(
@@ -272,9 +432,18 @@ def derive_dst_weekly(
         + merged["defensive_tds"] * TOUCHDOWN_POINTS
         + merged["blocked_kicks"] * BLOCKED_KICK_POINTS
     )
+    # NULL bonus MUST propagate to a NULL total. fillna(0) here would publish a
+    # concrete 0.0 for every team-week whose final score is unresolvable, which
+    # reads as "this defense scored nothing" rather than "not known yet". That
+    # is not a corner case: a mid-season `sync-nflverse --seasons latest` gets
+    # all 18 scheduled weeks from load_schedules() but only the played ones
+    # from load_pbp(), so every future week would ship a 0.0. Measured against
+    # the live 2026 schedule before this fix: 544 rows, all 0.0, zero NULLs.
+    # "Float64" (nullable) rather than "float64" because NaN in a FLOAT64
+    # column loads to BigQuery as NaN, a value -- only pd.NA loads as NULL.
     merged["fantasy_points_dst"] = (
-        event_points + merged["points_allowed_bonus"].fillna(0)
-    ).astype("float64")
+        event_points + merged["points_allowed_bonus"]
+    ).astype("Float64")
 
     merged["season"] = season
     merged["week"] = cast(

@@ -50,7 +50,7 @@ you choose to fetch.
 | `ftn_charting` | 185,215 | 2022–2025 | `sync-nflverse` |
 | `nfl_coaches` | 15,096 | 1999–2026 | `sync-nflverse` |
 | `ff_points_weekly` | 476,156 | 1999–2025 | `sync-nflverse` |
-| `ff_points_dst_weekly` | — | 1999–2025 | `sync-nflverse` |
+| `ff_points_dst_weekly` | not yet backfilled | 1999–2025 | `sync-nflverse` |
 | `team_scheme_week` | 14,546 | 1999–2025 | `sync-nflverse` |
 | `nfl_coordinators` | opt-in, 46.2% measured fill | 2010–2025 (as backfilled) | `sync-coordinators` |
 | `_ffl_ingest_runs` | run log, keyed `(source, season, scoring_format, teams)` | — | `sync-adp` |

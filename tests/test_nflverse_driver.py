@@ -235,7 +235,12 @@ def test_cli_rejects_an_unknown_table_name():
                               load_specs=lambda: [_table(name="ff_opportunity")])
 
 
-def test_cli_defaults_to_all_nine_loaded_specs():
+def test_cli_defaults_to_every_spec_the_registry_loads():
+    """The MECHANISM -- "no --tables means every loaded spec" -- against a
+    synthetic registry. The 9 names below are a fixture, deliberately not the
+    real registry (which has 10): the real count is asserted in
+    test_nflverse_tables_registry.py, and duplicating it here would only make
+    this test fail every time a table is added."""
     w, r = MagicMock(), MagicMock()
     w.write_season.return_value = 1
     r.completed_chunks.return_value = set()
@@ -247,8 +252,8 @@ def test_cli_defaults_to_all_nine_loaded_specs():
         _cli_ns(), bq_client=MagicMock(), writer=w, runs=r,
         load_specs=lambda: [_table(name=n) for n in names],
     )
-    # One season requested, nine tables -- nine write_season calls.
-    assert w.write_season.call_count == 9
+    # One season requested, len(names) tables -- one write_season call each.
+    assert w.write_season.call_count == len(names)
 
 
 def test_cli_tables_flag_restricts_to_the_requested_subset():

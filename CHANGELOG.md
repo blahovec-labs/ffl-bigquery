@@ -16,28 +16,62 @@ join them to.
   tenth season-chunked table, so it syncs through the existing `sync-nflverse` command rather
   than a command of its own. Every scored component ships beside its own raw count column, so a
   league with different rules re-derives totals from this table instead of re-deriving the table.
-- `verify --checks dst` — two guards. **Arithmetic:** `fantasy_points_dst` must equal the sum
-  of the components it publishes, catching a scoring weight changed in one place and not the
-  other, which no schema test can see. **Coverage:** every `DEF` on the ADP board must have
-  DST rows for that season — the exact failure this table exists to prevent, and the one that
-  franchise relocations (SD→LAC, STL→LAR, OAK→LV) would otherwise produce silently as a
-  defense scoring zero every week. The coverage half needs `--adp-table` and announces itself
-  as SKIPPED when it is absent, rather than reporting a clean run it did not perform.
+- `verify --checks dst` — four guards, each reporting on its own labelled output line.
+  **Arithmetic:** `fantasy_points_dst` must equal the sum of the components it publishes,
+  catching a scoring weight changed in one place and not the other, which no schema test can
+  see. Deliberately not trusted alone — it recomputes the total from the same columns the
+  transform wrote, so a wrong row can still be internally consistent. **Bonus re-derivation:**
+  `points_allowed_bonus` must re-derive from `points_allowed_total` via `dst_scoring`, the only
+  guard that can see a broken tier table or a NULL score quietly resolved to 0. **Per-season
+  signal floor:** no component column may be zero across a whole season — the only guard that
+  survives an upstream column *rename*, since an absent column reads as all-zeros by design.
+  Seasons too partial to judge are announced and skipped rather than falsely flagged.
+  **Coverage:** every `DEF` on the ADP board must have DST rows for that season — the exact
+  failure this table exists to prevent, and the one that franchise relocations (SD→LAC,
+  STL→LAR, OAK→LV) would otherwise produce silently as a defense scoring zero every week. The
+  coverage query is bounded to seasons the DST table actually covers (`ff_adp` is
+  forward-looking) and normalizes FFC's `LAR` to nflverse's `LA`; without either bound it
+  reported findings on a healthy dataset every run. The coverage half needs `--adp-table` and
+  announces itself as SKIPPED when it is absent, rather than reporting a clean run it did not
+  perform. An empty table is reported as a failure, not a pass.
 
 ### Derivation notes
 
+- **`posteam`/`defteam` orientation is not consistent across play types, so attribution is
+  per EVENT rather than per play.** On a run or pass `posteam` is the offense; on a **punt**
+  `posteam` is the punting team; on a **kickoff** `posteam` is the *receiving* team. Punt and
+  kickoff are inverted relative to each other, so no single upstream column means "this row's
+  team". Sacks, interceptions, safeties and blocked kicks aggregate by `defteam` (those occur
+  only where the orientation is unambiguous); touchdowns aggregate by `td_team` and fumble
+  recoveries by `fumble_recovery_1_team`.
 - **Touchdowns are credited by `td_team`, never `defteam`.** On a pick-six the scoring team is
   the defense, but on a punt-return touchdown the returning team was the *receiving* team on
-  that play — `defteam` gets exactly one of those two cases wrong.
+  that play — `defteam` gets exactly one of those two cases wrong. `td_team != posteam` is not
+  the answer either: it drops kickoff returns for the same reason. The rule is "every touchdown
+  except an offensive scrimmage touchdown" — credit `td_team` unless the scorer was `posteam`
+  on a play that is neither a kickoff nor a punt. Measured on 2024 REG: 64 defensive/special-
+  teams touchdowns, versus 56 under either of the two naive rules.
 - **Fumble recoveries use `fumble_recovery_1_team`, not `fumble_lost` credited to `defteam`.**
   `fumble_lost` is an offensive stat that only *implies* a defensive recovery, and it gets the
   awkward cases wrong (muffed punts, an offense recovering its own fumble, fumbles on a change
-  of possession).
+  of possession). A recovery counts only when `fumble_recovery_1_team != fumbled_1_team` — that
+  difference *is* the change of possession. Testing the recoverer against `defteam` is wrong in
+  both directions on punts: on 2024 REG it dropped 23 muffed punts recovered by the punting
+  team and wrongly credited 22 muffs the receiving team recovered itself.
+- **Known exception: safeties are attributed to `defteam`.** A safety on a punt play would be
+  credited to the receiving team rather than the punting team's coverage unit. There are zero
+  such plays in 2024 REG (all 15 safeties are run/pass/no_play), so the behaviour is documented
+  rather than special-cased against no evidence.
 - **The row set comes from the schedule, not from events.** A defense that records nothing
   still played and still earns its points-allowed bonus; deriving rows from events would drop
   it, making a quiet game indistinguishable from a bye.
-- **`points_allowed_bonus` is NULL — never 0 — when the final score is unresolvable.**
-  Defaulting to 0 would award a +10 shutout bonus to every gap and look like real data.
+- **`points_allowed_bonus` is NULL — never 0 — when the final score is unresolvable, and
+  `fantasy_points_dst` is NULL with it.** Defaulting the bonus to 0 would award a +10 shutout
+  bonus to every gap; resolving the *total* to `0.0` is just as wrong the other way, reading as
+  "this defense scored nothing" for a week that has not been played. That is the normal case
+  mid-season: `sync-nflverse --seasons latest` sees all 18 scheduled weeks from
+  `load_schedules()` but only the played ones from `load_pbp()`. Against the live 2026 schedule
+  this is 544 rows, all NULL.
 
 ### Known limitations
 

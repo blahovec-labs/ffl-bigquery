@@ -102,9 +102,9 @@ def run_sync_nflverse_cli(
     """CLI orchestration for `sync-nflverse`: resolve --dataset/--tables/
     --seasons into run_sync_nflverse's explicit arguments.
 
-    Every one of the nine season-chunked tables lands in the same dataset, so
+    Every one of the ten season-chunked tables lands in the same dataset, so
     table refs are derived as project.dataset.<spec.name> from a single
-    --dataset argument rather than making the operator pass nine per-table
+    --dataset argument rather than making the operator pass ten per-table
     flags. `--tables` is validated against the registry's known names before
     any spec is even loaded, so a typo fails fast with the full valid list --
     the same posture `sync-adp` takes for `--sources` (see

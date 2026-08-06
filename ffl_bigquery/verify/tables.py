@@ -30,6 +30,15 @@ from __future__ import annotations
 
 import argparse
 
+from ffl_bigquery.derive.dst_scoring import (
+    BLOCKED_KICK_POINTS,
+    FUMBLE_RECOVERY_POINTS,
+    INTERCEPTION_POINTS,
+    SACK_POINTS,
+    SAFETY_POINTS,
+    TOUCHDOWN_POINTS,
+    points_allowed_bonus,
+)
 from ffl_bigquery.verify.adp import CheckResult, summarize_results
 from ffl_bigquery.writer import TableRef
 
@@ -229,16 +238,15 @@ def check_dst_components_reconcile(rows) -> list[str]:
     with its own count columns. Imports the weights from dst_scoring rather
     than hardcoding them, so a weight change cannot drift between the
     transform and this verifier.
-    """
-    from ffl_bigquery.derive.dst_scoring import (
-        BLOCKED_KICK_POINTS,
-        FUMBLE_RECOVERY_POINTS,
-        INTERCEPTION_POINTS,
-        SACK_POINTS,
-        SAFETY_POINTS,
-        TOUCHDOWN_POINTS,
-    )
 
+    NOT sufficient on its own, and deliberately not treated as such: it
+    recomputes the total from the very columns the transform wrote, using the
+    same constants, so a row can be internally consistent and still wrong.
+    Both special-teams attribution bugs fixed in 0.2.0 reconciled to zero
+    findings here -- the ARI 2024 week 1 row was a perfectly consistent 3.0
+    where 9.0 was correct. check_dst_bonus_rederives and
+    check_dst_season_signal_floor exist because of that.
+    """
     findings: list[str] = []
     for r in rows:
         bonus = r.points_allowed_bonus
@@ -264,6 +272,103 @@ def check_dst_components_reconcile(rows) -> list[str]:
     return findings
 
 
+def check_dst_bonus_rederives(rows) -> list[str]:
+    """points_allowed_bonus must re-derive from points_allowed_total.
+
+    Genuinely independent of check_dst_components_reconcile, which treats the
+    bonus as a given input and never looks at points_allowed_total at all.
+    This is the only check that can see a broken tier table, an off-by-one at
+    a tier boundary, or a NULL score that was quietly resolved to 0.
+    """
+    findings: list[str] = []
+    for r in rows:
+        total = r.points_allowed_total
+        expected = points_allowed_bonus(None if total is None else int(total))
+        actual = r.points_allowed_bonus
+        if expected != actual:
+            findings.append(
+                f"{r.season} wk{r.week} {r.team}: points_allowed_bonus="
+                f"{actual} but points_allowed_total={total} re-derives to "
+                f"{expected}"
+            )
+    return findings
+
+
+_DST_COMPONENT_COLUMNS = (
+    "sacks", "interceptions", "fumble_recoveries", "safeties",
+    "defensive_tds", "blocked_kicks",
+)
+
+# A full regular season is 32 teams x 17 games = 544 team-weeks. The signal
+# floor below only applies to seasons at least this complete: safeties are
+# genuinely rare (15 league-wide in 2024), so a partially-synced in-progress
+# season can legitimately have zero of them and the floor would be a
+# guaranteed false positive -- the exact failure that gets a guard switched
+# off. Partial seasons are announced by run_verify_dst, never silently
+# dropped.
+_DST_SIGNAL_FLOOR_MIN_ROWS = 400
+
+
+def check_dst_season_signal_floor(
+    rows, *, min_rows: int = _DST_SIGNAL_FLOOR_MIN_ROWS,
+) -> tuple[list[str], list[int]]:
+    """No component column may be uniformly zero across a whole season.
+
+    Returns (findings, seasons skipped as too partial to judge).
+
+    This is the only check here that can survive an upstream column rename.
+    derive.dst_weekly._flag returns all zeros for a column that is absent --
+    by design, because nflverse dtypes and column sets are vintage-dependent
+    -- so if nflverse renames `sack` tomorrow, every defense silently scores
+    bonus-only and reconciliation, bonus re-derivation and the ADP coverage
+    guard all still pass. A season-wide zero in any component is not a
+    plausible football outcome; it means the column stopped arriving.
+    """
+    totals: dict[int, dict[str, int]] = {}
+    counts: dict[int, int] = {}
+    for r in rows:
+        season = int(r.season)
+        acc = totals.setdefault(season, dict.fromkeys(_DST_COMPONENT_COLUMNS, 0))
+        counts[season] = counts.get(season, 0) + 1
+        for col in _DST_COMPONENT_COLUMNS:
+            acc[col] += int(getattr(r, col, None) or 0)
+
+    findings: list[str] = []
+    skipped: list[int] = []
+    for season in sorted(totals):
+        if counts[season] < min_rows:
+            skipped.append(season)
+            continue
+        for col in _DST_COMPONENT_COLUMNS:
+            if totals[season][col] == 0:
+                findings.append(
+                    f"{season}: {col} is 0 across all {counts[season]} row(s) "
+                    "in the season -- an upstream column was probably renamed "
+                    "or dropped (absent columns count as 0 by design)"
+                )
+    return findings, skipped
+
+
+# FFC publishes the Rams as "LAR"; nflverse schedules and play-by-play use
+# "LA". Without normalizing, any season in which the Rams DST is drafted
+# yields a permanent, unfixable coverage finding.
+#
+# NOTE FOR FUTURE READERS: this is the SECOND team vocabulary in the package.
+# ffl_bigquery/coordinators/wikipedia.py carries the other one (abbreviation ->
+# Wikipedia article title, including its own pre-relocation caveats). If you
+# add a franchise or an alias here, check whether that map needs it too.
+DST_TEAM_ABBREV_ALIASES: dict[str, str] = {"LAR": "LA"}
+
+
+def _normalized_team_sql(col: str) -> str:
+    if not DST_TEAM_ABBREV_ALIASES:
+        return col
+    whens = " ".join(
+        f"WHEN '{src}' THEN '{dst}'" for src, dst in DST_TEAM_ABBREV_ALIASES.items()
+    )
+    return f"CASE {col} {whens} ELSE {col} END"
+
+
 def check_dst_covers_adp_defenses(rows) -> list[str]:
     """Every team defense on the ADP board must have DST rows for that season.
 
@@ -272,61 +377,120 @@ def check_dst_covers_adp_defenses(rows) -> list[str]:
     relocations (SD->LAC, STL->LAR, OAK->LV), where an ADP board naming a team
     by its pre-move abbreviation silently yields a defense that scores zero
     every week instead of raising anything.
+
+    Rows are expected to be already bounded to seasons the DST table can
+    cover, and already normalized through DST_TEAM_ABBREV_ALIASES -- see
+    run_verify_dst's query. Both of those omissions made this guard fail on
+    healthy data every single run.
     """
-    return [
-        f"{r.season} {r.team}: on the ADP board but has 0 ff_points_dst_weekly rows"
-        for r in rows
-        if not (r.dst_weeks or 0)
-    ]
+    findings: list[str] = []
+    for r in rows:
+        if r.dst_weeks or 0:
+            continue
+        adp_team = getattr(r, "adp_team", None)
+        label = (
+            r.team if not adp_team or adp_team == r.team
+            else f"{adp_team} (normalized to {r.team})"
+        )
+        findings.append(
+            f"{r.season} {label}: on the ADP board but has 0 "
+            "ff_points_dst_weekly rows"
+        )
+    return findings
 
 
 def run_verify_dst(ns: argparse.Namespace, *, bq_client) -> int:
-    """Runs both DST guards: arithmetic reconciliation always, ADP coverage
-    only when --adp-table is given. The coverage half prints an explicit
-    SKIPPED line rather than being silently omitted -- a check that omits
-    half its work while printing "0 findings" reads exactly like a pass,
-    which has already cost real debugging time on this project.
+    """Runs four DST guards: arithmetic reconciliation, bonus re-derivation
+    and the per-season signal floor always; ADP coverage only when
+    --adp-table is given. The coverage half prints an explicit SKIPPED line
+    rather than being silently omitted -- a check that omits half its work
+    while printing "0 findings" reads exactly like a pass, which has already
+    cost real debugging time on this project.
+
+    Each finding type gets its own labelled summary line so a run's output
+    says which guards actually ran and what each concluded.
     """
     dst_table = str(TableRef.parse(ns.dst_table))
     sql = f"""
         SELECT season, week, team, sacks, interceptions, fumble_recoveries,
-               safeties, defensive_tds, blocked_kicks, points_allowed_bonus,
-               fantasy_points_dst
+               safeties, defensive_tds, blocked_kicks, points_allowed_total,
+               points_allowed_bonus, fantasy_points_dst
         FROM `{dst_table}`
     """
     rows = list(bq_client.query(sql).result())
+    if not rows:
+        # Same rule as verify/adp.py: an empty table is a failure, not a pass.
+        print(f"[dst] no rows at all in {dst_table} -- did the sync run?")
+        return 1
+
     findings = check_dst_components_reconcile(rows)
     for f in findings:
-        print(f"[dst] {f}")
-    print(f"[dst] {len(findings)} arithmetic finding(s) across {len(rows)} row(s)")
+        print(f"[dst][arithmetic] {f}")
+    print(
+        f"[dst][arithmetic] {len(findings)} finding(s) across {len(rows)} row(s)"
+    )
+
+    bonus_findings = check_dst_bonus_rederives(rows)
+    for f in bonus_findings:
+        print(f"[dst][bonus] {f}")
+    print(
+        f"[dst][bonus] {len(bonus_findings)} finding(s) re-deriving "
+        f"points_allowed_bonus from points_allowed_total"
+    )
+
+    floor_findings, floor_skipped = check_dst_season_signal_floor(rows)
+    for f in floor_findings:
+        print(f"[dst][signal-floor] {f}")
+    print(
+        f"[dst][signal-floor] {len(floor_findings)} finding(s); "
+        f"{len(floor_skipped)} season(s) too partial to judge"
+        + (f" ({floor_skipped})" if floor_skipped else "")
+    )
 
     coverage_findings: list[str] = []
     if ns.adp_table:
         adp_table = str(TableRef.parse(ns.adp_table))
+        # Two bounds without which this guard fails on healthy data forever:
+        #  * ff_adp is FORWARD-LOOKING (FFC already publishes DEF entries for
+        #    next season) while this table can only cover completed seasons,
+        #    so unbounded it reports every drafted defense of the upcoming
+        #    season as missing.
+        #  * FFC's team vocabulary is not nflverse's -- see
+        #    DST_TEAM_ABBREV_ALIASES.
+        norm = _normalized_team_sql("team")
         coverage_sql = f"""
-            SELECT a.season, a.team,
-                   COUNT(DISTINCT d.week) AS dst_weeks
-            FROM (
-              SELECT DISTINCT season, team
+            WITH drafted AS (
+              SELECT DISTINCT season, team AS adp_team, {norm} AS team
               FROM `{adp_table}`
               WHERE position IN ('DEF', 'DST') AND team IS NOT NULL
-            ) a
+            ),
+            covered AS (
+              SELECT MAX(season) AS max_season FROM `{dst_table}`
+            )
+            SELECT a.season, a.adp_team, a.team,
+                   COUNT(DISTINCT d.week) AS dst_weeks
+            FROM drafted a
+            CROSS JOIN covered c
             LEFT JOIN `{dst_table}` d
               ON d.season = a.season AND d.team = a.team
-            GROUP BY a.season, a.team
+            WHERE a.season <= c.max_season
+            GROUP BY a.season, a.adp_team, a.team
         """
         coverage_rows = list(bq_client.query(coverage_sql).result())
         coverage_findings = check_dst_covers_adp_defenses(coverage_rows)
         for f in coverage_findings:
-            print(f"[dst] {f}")
+            print(f"[dst][coverage] {f}")
         print(
-            f"[dst] {len(coverage_findings)} coverage finding(s) across "
-            f"{len(coverage_rows)} drafted (season, team) defense(s)"
+            f"[dst][coverage] {len(coverage_findings)} finding(s) across "
+            f"{len(coverage_rows)} drafted (season, team) defense(s) in "
+            "seasons this table covers"
         )
     else:
         # Fails VISIBLY rather than silently reporting a clean run -- a check
         # that skips its own coverage half while printing "0 findings" reads
         # exactly like a pass.
-        print("[dst] coverage check SKIPPED (no --adp-table given)")
+        print("[dst][coverage] SKIPPED (no --adp-table given)")
 
-    return 1 if (findings or coverage_findings) else 0
+    return 1 if (
+        findings or bonus_findings or floor_findings or coverage_findings
+    ) else 0
