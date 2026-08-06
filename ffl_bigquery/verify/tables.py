@@ -300,12 +300,13 @@ _DST_COMPONENT_COLUMNS = (
 )
 
 # A full regular season is 32 teams x 17 games = 544 team-weeks. The signal
-# floor below only applies to seasons at least this complete: safeties are
-# genuinely rare (15 league-wide in 2024), so a partially-synced in-progress
-# season can legitimately have zero of them and the floor would be a
-# guaranteed false positive -- the exact failure that gets a guard switched
-# off. Partial seasons are announced by run_verify_dst, never silently
-# dropped.
+# floor below requires this many team-weeks ACTUALLY PLAYED, not merely
+# scheduled -- see check_dst_season_signal_floor's docstring for why row
+# count alone is the wrong gate. Safeties are genuinely rare (15 league-wide
+# in 2024), so a season with fewer played team-weeks than this can
+# legitimately have zero of them, and the floor would be a guaranteed false
+# positive -- the exact failure that gets a guard switched off. Partial
+# seasons are announced by run_verify_dst, never silently dropped.
 _DST_SIGNAL_FLOOR_MIN_ROWS = 400
 
 
@@ -323,28 +324,53 @@ def check_dst_season_signal_floor(
     bonus-only and reconciliation, bonus re-derivation and the ADP coverage
     guard all still pass. A season-wide zero in any component is not a
     plausible football outcome; it means the column stopped arriving.
+
+    The floor is gated on GAMES ACTUALLY PLAYED, never on raw row count.
+    derive/dst_weekly.py's _team_game_rows docstring is explicit that the row
+    SET comes from the schedule, not from played games -- a season has its
+    full row count (544 for a complete 32-team, 17-game season) the instant
+    the schedule syncs, before a single game is played. Gating on row count
+    is therefore dead code (no 1999-2025 season has ever had fewer than 400
+    scheduled rows) and actively wrong: measured against the live 2026
+    schedule with play-by-play truncated, a schedule-only season (544 rows,
+    0 games played) produced 6 findings -- one per component -- on perfectly
+    healthy data, and even a Thursday-opener-only season (544 rows, 1 game
+    played) still produced 3. This is not hypothetical: nflreadpy unlocks
+    load_pbp() for the current season on the Thursday after Labor Day, so the
+    season-opener window is exactly when `--seasons latest` writes a
+    zero-or-one-game season.
+
+    A row's points_allowed_total is NULL until load_schedules() resolves a
+    final score (see FF_POINTS_DST_WEEKLY_SCHEMA's points_allowed_total
+    entry), so counting non-NULL points_allowed_total per season is a played-
+    game count, and that count -- not the row count -- is compared against
+    min_rows.
     """
     totals: dict[int, dict[str, int]] = {}
     counts: dict[int, int] = {}
+    played: dict[int, int] = {}
     for r in rows:
         season = int(r.season)
         acc = totals.setdefault(season, dict.fromkeys(_DST_COMPONENT_COLUMNS, 0))
         counts[season] = counts.get(season, 0) + 1
+        if getattr(r, "points_allowed_total", None) is not None:
+            played[season] = played.get(season, 0) + 1
         for col in _DST_COMPONENT_COLUMNS:
             acc[col] += int(getattr(r, col, None) or 0)
 
     findings: list[str] = []
     skipped: list[int] = []
     for season in sorted(totals):
-        if counts[season] < min_rows:
+        if played.get(season, 0) < min_rows:
             skipped.append(season)
             continue
         for col in _DST_COMPONENT_COLUMNS:
             if totals[season][col] == 0:
                 findings.append(
                     f"{season}: {col} is 0 across all {counts[season]} row(s) "
-                    "in the season -- an upstream column was probably renamed "
-                    "or dropped (absent columns count as 0 by design)"
+                    f"({played[season]} played) in the season -- an upstream "
+                    "column was probably renamed or dropped (absent columns "
+                    "count as 0 by design)"
                 )
     return findings, skipped
 
@@ -352,6 +378,12 @@ def check_dst_season_signal_floor(
 # FFC publishes the Rams as "LAR"; nflverse schedules and play-by-play use
 # "LA". Without normalizing, any season in which the Rams DST is drafted
 # yields a permanent, unfixable coverage finding.
+#
+# This is a STATIC, one-way alias, which only works because "LAR" and "LA"
+# both name the same franchise in the same place today. It cannot express a
+# relocation, where the correct mapping is SEASON-dependent -- see
+# check_dst_covers_adp_defenses's docstring for why franchise moves are
+# handled as a separate finding class instead of by growing this map.
 #
 # NOTE FOR FUTURE READERS: this is the SECOND team vocabulary in the package.
 # ffl_bigquery/coordinators/wikipedia.py carries the other one (abbreviation ->
@@ -369,21 +401,51 @@ def _normalized_team_sql(col: str) -> str:
     return f"CASE {col} {whens} ELSE {col} END"
 
 
-def check_dst_covers_adp_defenses(rows) -> list[str]:
+def check_dst_covers_adp_defenses(rows) -> tuple[list[str], list[str]]:
     """Every team defense on the ADP board must have DST rows for that season.
 
-    This is the coverage guard for the exact bug this table was built to kill:
-    a drafted DEF with nothing to score against. It also catches franchise
-    relocations (SD->LAC, STL->LAR, OAK->LV), where an ADP board naming a team
-    by its pre-move abbreviation silently yields a defense that scores zero
-    every week instead of raising anything.
+    Returns (findings, vocabulary_mismatches). Only `findings` fails the
+    check -- see below.
+
+    This is the coverage guard for the exact bug this table was built to
+    kill: a drafted DEF with nothing to score against.
+
+    FFC PUBLISHES CURRENT FRANCHISE ABBREVIATIONS RETROACTIVELY -- this is
+    non-obvious and someone will otherwise "fix" this guard back into
+    failing. Worked example, verified against the live FFC API and real
+    nflverse schedules: FFC's *2010* ADP board names the Chargers' defense
+    "LAC" -- the abbreviation the franchise uses TODAY -- even though the
+    team did not move to LA (or adopt the LAC code) until 2017; nflverse's
+    2010 schedule and play-by-play, correctly, call that team "SD". Same
+    pattern for "LAR" (nflverse: STL, 2013-2015) and "LV" (nflverse: OAK,
+    2016). A static one-way alias table such as DST_TEAM_ABBREV_ALIASES
+    cannot express this, because the correct mapping is SEASON-dependent:
+    "LAC" means "SD" in 2010 but "LAC" in 2020.
+
+    Because of that, this function separates two classes that look identical
+    from a single (season, team) row alone:
+
+    * A GENUINE GAP (`findings`, fails the check): a drafted defense with 0
+      ff_points_dst_weekly rows for its season, AND whose abbreviation
+      appears nowhere in the DST table for ANY season. This is the real bug
+      the guard exists to catch -- an abbreviation the DST table's team
+      vocabulary has simply never produced.
+    * A VOCABULARY MISMATCH (`mismatches`, reported but does NOT fail): 0
+      rows for this season, but the abbreviation IS present in the DST table
+      for some other season -- the signature of a franchise relocation or a
+      source (like FFC) publishing today's abbreviation for a past season.
+      Reported on its own clearly-labelled line so it stays visible without
+      taking the check down.
 
     Rows are expected to be already bounded to seasons the DST table can
-    cover, and already normalized through DST_TEAM_ABBREV_ALIASES -- see
-    run_verify_dst's query. Both of those omissions made this guard fail on
-    healthy data every single run.
+    cover, already normalized through DST_TEAM_ABBREV_ALIASES, and carrying
+    a `team_seen_any_season` flag (true if the row's `team` appears in the
+    DST table for at least one season) -- see run_verify_dst's query. Every
+    one of those omissions made this guard fail on healthy data every single
+    run.
     """
     findings: list[str] = []
+    mismatches: list[str] = []
     for r in rows:
         if r.dst_weeks or 0:
             continue
@@ -392,11 +454,19 @@ def check_dst_covers_adp_defenses(rows) -> list[str]:
             r.team if not adp_team or adp_team == r.team
             else f"{adp_team} (normalized to {r.team})"
         )
-        findings.append(
+        base = (
             f"{r.season} {label}: on the ADP board but has 0 "
             "ff_points_dst_weekly rows"
         )
-    return findings
+        if getattr(r, "team_seen_any_season", False):
+            mismatches.append(
+                f"{base} in {r.season} -- {r.team} DOES have rows in other "
+                "seasons, so this looks like a franchise relocation or a "
+                "retroactively-current abbreviation, not a genuine gap"
+            )
+        else:
+            findings.append(base)
+    return findings, mismatches
 
 
 def run_verify_dst(ns: argparse.Namespace, *, bq_client) -> int:
@@ -406,6 +476,11 @@ def run_verify_dst(ns: argparse.Namespace, *, bq_client) -> int:
     rather than being silently omitted -- a check that omits half its work
     while printing "0 findings" reads exactly like a pass, which has already
     cost real debugging time on this project.
+
+    The coverage guard itself splits into two labelled lines: `[dst][coverage]`
+    (genuine gaps, fails the check) and `[dst][coverage-mismatch]` (franchise
+    relocations / FFC's retroactive-current-abbreviation habit, reported but
+    never failing -- see check_dst_covers_adp_defenses's docstring).
 
     Each finding type gets its own labelled summary line so a run's output
     says which guards actually ran and what each concluded.
@@ -456,7 +531,9 @@ def run_verify_dst(ns: argparse.Namespace, *, bq_client) -> int:
         #    so unbounded it reports every drafted defense of the upcoming
         #    season as missing.
         #  * FFC's team vocabulary is not nflverse's -- see
-        #    DST_TEAM_ABBREV_ALIASES.
+        #    DST_TEAM_ABBREV_ALIASES for the static (non-relocation) case and
+        #    check_dst_covers_adp_defenses's docstring for why relocations
+        #    need `team_seen_any_season` instead of a bigger alias table.
         norm = _normalized_team_sql("team")
         coverage_sql = f"""
             WITH drafted AS (
@@ -468,7 +545,10 @@ def run_verify_dst(ns: argparse.Namespace, *, bq_client) -> int:
               SELECT MAX(season) AS max_season FROM `{dst_table}`
             )
             SELECT a.season, a.adp_team, a.team,
-                   COUNT(DISTINCT d.week) AS dst_weeks
+                   COUNT(DISTINCT d.week) AS dst_weeks,
+                   EXISTS(
+                     SELECT 1 FROM `{dst_table}` dt WHERE dt.team = a.team
+                   ) AS team_seen_any_season
             FROM drafted a
             CROSS JOIN covered c
             LEFT JOIN `{dst_table}` d
@@ -477,13 +557,22 @@ def run_verify_dst(ns: argparse.Namespace, *, bq_client) -> int:
             GROUP BY a.season, a.adp_team, a.team
         """
         coverage_rows = list(bq_client.query(coverage_sql).result())
-        coverage_findings = check_dst_covers_adp_defenses(coverage_rows)
+        coverage_findings, coverage_mismatches = check_dst_covers_adp_defenses(
+            coverage_rows,
+        )
         for f in coverage_findings:
             print(f"[dst][coverage] {f}")
         print(
             f"[dst][coverage] {len(coverage_findings)} finding(s) across "
             f"{len(coverage_rows)} drafted (season, team) defense(s) in "
             "seasons this table covers"
+        )
+        for f in coverage_mismatches:
+            print(f"[dst][coverage-mismatch] {f}")
+        print(
+            f"[dst][coverage-mismatch] {len(coverage_mismatches)} vocabulary "
+            "mismatch(es) (franchise relocation or a retroactively-current "
+            "abbreviation) -- reported, not failed"
         )
     else:
         # Fails VISIBLY rather than silently reporting a clean run -- a check

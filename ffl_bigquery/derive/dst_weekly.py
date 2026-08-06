@@ -91,8 +91,9 @@ FF_POINTS_DST_WEEKLY_SCHEMA: list[ColumnSpec] = [
         "-- i.e. a genuine change of possession. Testing recovery against "
         "defteam instead is wrong in BOTH directions on punts, where posteam "
         "is the PUNTING team: measured on 2024 REG, it dropped 23 muffed punts "
-        "recovered by the punting team, and wrongly credited 22 muffs the "
-        "receiving team recovered itself (no change of possession at all)."],
+        "recovered by the punting team, and wrongly credited 25 self-recoveries "
+        "(22 punts, 3 passes) where the receiving team recovered its own muff "
+        "(no change of possession at all)."],
        "fumble_recovery_1_team"),
     _c("safeties", "INT64", "NULLABLE", "Safeties recorded.",
        "Count of safeties credited to this defense. Worth 2 points each. Rare: "
@@ -280,8 +281,9 @@ def _fumble_recovery_mask(df: pd.DataFrame) -> pd.Series:
     fumbled_1_team -- that difference IS the change of possession. Comparing
     the recoverer to defteam instead is wrong in both directions on punts,
     where posteam is the punting team: on 2024 REG it dropped 23 muffed punts
-    recovered by the punting team and wrongly credited 22 muffs the receiving
-    team recovered itself (no change of possession, so no fantasy credit).
+    recovered by the punting team and wrongly credited 25 self-recoveries (22
+    punts, 3 passes) where the receiving team recovered its own muff (no
+    change of possession, so no fantasy credit).
 
     fumbled_1_team is published by nflverse for every season this table covers
     -- verified present and non-null on all 739 (1999) and 576 (2024) plays
@@ -439,8 +441,14 @@ def derive_dst_weekly(
     # all 18 scheduled weeks from load_schedules() but only the played ones
     # from load_pbp(), so every future week would ship a 0.0. Measured against
     # the live 2026 schedule before this fix: 544 rows, all 0.0, zero NULLs.
-    # "Float64" (nullable) rather than "float64" because NaN in a FLOAT64
-    # column loads to BigQuery as NaN, a value -- only pd.NA loads as NULL.
+    # "Float64" (nullable) rather than "float64": both were tested end-to-end
+    # through coerce_df_for_bq + the pyarrow conversion load_table_from_dataframe
+    # uses, and a float64 NaN loads exactly like pd.NA does (arrow `double`,
+    # null_count=1) -- so this is not load-bearing for correctness either way.
+    # Kept nullable because it keeps the NULL explicit through the pandas layer
+    # itself (no reliance on the BigQuery client's NaN handling) and matches
+    # points_allowed_total/points_allowed_bonus above, which are nullable for
+    # the same reason.
     merged["fantasy_points_dst"] = (
         event_points + merged["points_allowed_bonus"]
     ).astype("Float64")

@@ -57,7 +57,8 @@ join them to.
   of possession). A recovery counts only when `fumble_recovery_1_team != fumbled_1_team` — that
   difference *is* the change of possession. Testing the recoverer against `defteam` is wrong in
   both directions on punts: on 2024 REG it dropped 23 muffed punts recovered by the punting
-  team and wrongly credited 22 muffs the receiving team recovered itself.
+  team and wrongly credited 25 self-recoveries (22 punts, 3 passes) where the receiving team
+  recovered its own muff.
 - **Known exception: safeties are attributed to `defteam`.** A safety on a punt play would be
   credited to the receiving team rather than the punting team's coverage unit. There are zero
   such plays in 2024 REG (all 15 safeties are run/pass/no_play), so the behaviour is documented

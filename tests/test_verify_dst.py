@@ -147,6 +147,57 @@ def test_a_partial_season_is_skipped_rather_than_falsely_flagged():
     assert skipped == [2024]
 
 
+def _unplayed_rows(n, season=2024, week_start=0):
+    """Schedule-only rows: a row's points_allowed_total is NULL until
+    load_schedules() resolves a final score. Every count column is 0 because
+    the game has not been played, exactly what derive_dst_weekly writes for a
+    scheduled-but-unplayed team-week."""
+    return [
+        _row(
+            season=season, week=week_start + i, points_allowed_total=None,
+            points_allowed_bonus=None, fantasy_points_dst=None,
+            sacks=0, interceptions=0, fumble_recoveries=0, safeties=0,
+            defensive_tds=0, blocked_kicks=0,
+        )
+        for i in range(n)
+    ]
+
+
+def test_signal_floor_does_not_fire_on_a_schedule_only_season():
+    """The row SET comes from the schedule (derive/dst_weekly.py's
+    _team_game_rows docstring), not from played games, so a season has its
+    full row count -- 544 for a complete 32-team, 17-game season -- the
+    instant the schedule syncs, before a single game is played. Gating the
+    floor on row count instead of games played made the live 2026 schedule
+    (544 rows, 0 games played) produce 6 findings on perfectly healthy data."""
+    findings, skipped = check_dst_season_signal_floor(_unplayed_rows(544))
+    assert findings == []
+    assert skipped == [2024]
+
+
+def test_signal_floor_does_not_fire_when_only_a_game_or_two_played():
+    """nflreadpy unlocks load_pbp() for the current season on the Thursday
+    after Labor Day, so the season-opener window is exactly when
+    `--seasons latest` writes a season with one game played and 543 still
+    scheduled. A floor gated on games played must still skip it."""
+    played = _season_rows(2)  # 2 team-weeks actually played
+    unplayed = _unplayed_rows(542, week_start=2)
+    findings, skipped = check_dst_season_signal_floor(played + unplayed)
+    assert findings == []
+    assert skipped == [2024]
+
+
+def test_signal_floor_still_fires_on_a_fully_played_season_with_a_zeroed_component():
+    """The floor must not be gutted by the games-played fix: a season where
+    every team-week was actually played (544 played, 0 scheduled-but-unplayed)
+    and one component is uniformly zero is exactly the case this guard exists
+    to catch."""
+    findings, skipped = check_dst_season_signal_floor(_season_rows(544, sacks=0))
+    assert skipped == []
+    assert len(findings) == 1
+    assert "sacks" in findings[0] and "2024" in findings[0]
+
+
 def test_each_season_is_judged_separately():
     rows = _season_rows(3) + [
         _row(season=2023, week=i, sacks=0, interceptions=1, fumble_recoveries=1,
@@ -162,18 +213,32 @@ def test_each_season_is_judged_separately():
 
 def test_every_drafted_defense_resolves():
     rows = [_Row(season=2024, team="BAL", dst_weeks=17)]
-    assert check_dst_covers_adp_defenses(rows) == []
+    assert check_dst_covers_adp_defenses(rows) == ([], [])
 
 
-def test_drafted_defense_with_no_dst_rows_is_reported():
+def test_drafted_defense_with_no_dst_rows_and_never_seen_is_a_genuine_gap():
     """The exact failure this table exists to prevent: a DEF on the draft board
-    with nothing to score against. Team abbreviations drift across relocations
-    (SD->LAC, STL->LAR, OAK->LV), so an ADP board naming a franchise by its
-    old code would silently produce zero-scoring defenses rather than an error."""
-    rows = [_Row(season=2016, team="SD", dst_weeks=0)]
-    findings = check_dst_covers_adp_defenses(rows)
+    with nothing to score against, and the abbreviation appears nowhere in the
+    DST table for any season -- not a relocation, an actual missing team."""
+    rows = [_Row(season=2016, team="SD", dst_weeks=0, team_seen_any_season=False)]
+    findings, mismatches = check_dst_covers_adp_defenses(rows)
     assert len(findings) == 1
     assert "SD" in findings[0] and "2016" in findings[0]
+    assert mismatches == []
+
+
+def test_drafted_defense_absent_this_season_but_seen_in_others_is_a_mismatch_not_a_failure():
+    """FFC publishes CURRENT franchise abbreviations retroactively: its 2010
+    board names the Chargers' defense 'LAC' -- today's code -- even though
+    nflverse's 2010 schedule (correctly) calls that team 'SD'; the franchise
+    did not move to LA or adopt LAC until 2017. A team absent for THIS season
+    but present in the DST table for some OTHER season is that signature, and
+    must be reported without failing the check."""
+    rows = [_Row(season=2010, team="LAC", dst_weeks=0, team_seen_any_season=True)]
+    findings, mismatches = check_dst_covers_adp_defenses(rows)
+    assert findings == []
+    assert len(mismatches) == 1
+    assert "LAC" in mismatches[0] and "2010" in mismatches[0]
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +275,9 @@ def test_run_verify_dst_fails_on_arithmetic_mismatch():
 
 def test_run_verify_dst_coverage_half_fails_on_a_gap():
     reconcile_rows = [_row()]
-    coverage_rows = [_Row(season=2016, team="SD", dst_weeks=0)]
+    coverage_rows = [
+        _Row(season=2016, team="SD", dst_weeks=0, team_seen_any_season=False),
+    ]
     c = _query_returning_sequence([reconcile_rows, coverage_rows])
     ns = argparse.Namespace(
         dst_table="p.d.ff_points_dst_weekly", adp_table="p.d.ff_adp",
@@ -226,6 +293,24 @@ def test_run_verify_dst_coverage_half_passes_when_fully_covered():
         dst_table="p.d.ff_points_dst_weekly", adp_table="p.d.ff_adp",
     )
     assert run_verify_dst(ns, bq_client=c) == 0
+
+
+def test_run_verify_dst_coverage_mismatch_is_reported_but_does_not_fail(capsys):
+    """The 2010 LAC/SD case (see check_dst_covers_adp_defenses's docstring): a
+    team missing for this season but present in the DST table for others must
+    not take the whole check down."""
+    reconcile_rows = [_row()]
+    coverage_rows = [
+        _Row(season=2010, team="LAC", dst_weeks=0, team_seen_any_season=True),
+    ]
+    c = _query_returning_sequence([reconcile_rows, coverage_rows])
+    ns = argparse.Namespace(
+        dst_table="p.d.ff_points_dst_weekly", adp_table="p.d.ff_adp",
+    )
+    assert run_verify_dst(ns, bq_client=c) == 0
+    out = capsys.readouterr().out
+    assert "[dst][coverage-mismatch]" in out
+    assert "LAC" in out
 
 
 def test_run_verify_dst_fails_on_a_bonus_that_does_not_re_derive():
@@ -287,7 +372,20 @@ def test_coverage_query_normalizes_the_rams_abbreviation():
 
 
 def test_coverage_finding_names_the_abbreviation_the_adp_board_actually_used():
-    rows = [_Row(season=2016, adp_team="STL", team="LA", dst_weeks=0)]
-    findings = check_dst_covers_adp_defenses(rows)
+    rows = [_Row(
+        season=2016, adp_team="STL", team="LA", dst_weeks=0,
+        team_seen_any_season=False,
+    )]
+    findings, mismatches = check_dst_covers_adp_defenses(rows)
     assert len(findings) == 1
     assert "STL" in findings[0] and "LA" in findings[0]
+    assert mismatches == []
+
+
+def test_coverage_query_reports_whether_the_team_was_ever_seen():
+    """Powers the genuine-gap vs vocabulary-mismatch split: without this
+    column check_dst_covers_adp_defenses has no way to distinguish a team
+    that appears nowhere in the DST table from a relocation."""
+    sql = _coverage_sql()
+    assert "team_seen_any_season" in sql
+    assert "EXISTS" in sql
