@@ -21,6 +21,7 @@ from ffl_bigquery.coordinators.schema import (
     NFL_COORDINATORS_SCHEMA,
 )
 from ffl_bigquery.derive.dst_weekly import DST_WEEKLY_SPEC
+from ffl_bigquery.derive.kicker_weekly import KICKER_WEEKLY_SPEC
 from ffl_bigquery.derive.points_weekly import POINTS_WEEKLY_SPEC
 from ffl_bigquery.derive.scheme_week import SCHEME_WEEK_SPEC
 from ffl_bigquery.nflverse.tables.depth_charts import DEPTH_CHARTS_SPEC
@@ -52,6 +53,11 @@ ALL_SPECS = [
     OPPORTUNITY_SPEC, SNAP_COUNTS_SPEC, INJURIES_SPEC, DEPTH_CHARTS_SPEC,
     PARTICIPATION_SPEC, FTN_CHARTING_SPEC, COACHES_SPEC, POINTS_WEEKLY_SPEC,
     SCHEME_WEEK_SPEC, DST_WEEKLY_SPEC,
+    # KICKER_WEEKLY_SPEC is guarded here from the moment it exists, ahead of
+    # being wired into the sync registry -- `test_all_specs_covers_every_
+    # registered_spec` only catches specs already registered, which is one
+    # task too late to stop a bad clustering key from reaching table creation.
+    KICKER_WEEKLY_SPEC,
     # Both of these build their schema types from an inferred/measured
     # source (a parquet sample for ff_rankings; Wikipedia text for
     # nfl_coordinators) rather than a hand-picked BqType -- exactly the
