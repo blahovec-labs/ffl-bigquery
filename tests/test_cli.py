@@ -179,3 +179,22 @@ def test_verify_accepts_the_kicker_check_flags():
     assert ns.checks == "kicker"
     assert ns.kicker_table == "p.d.ff_points_k_weekly"
     assert ns.plays_table == "p.d.nfl_plays"
+
+
+def test_the_packaged_version_and_the_reported_version_agree():
+    """`--version`, the HTTP User-Agent and every run log's `library_version`
+    all read ffl_bigquery/_version.py, while PyPI publishes pyproject.toml's.
+    They drifted once already -- the 0.2.0 release bumped pyproject and left
+    _version.py at 0.1.0, so a whole release's run rows are stamped with the
+    wrong library version and cannot be told apart from 0.1.0's. Nothing else
+    in the suite can see that, because each file is internally consistent."""
+    import tomllib
+    from pathlib import Path
+
+    from ffl_bigquery._version import __version__
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    packaged = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
+    assert __version__ == packaged, (
+        f"_version.py says {__version__} but pyproject.toml says {packaged}"
+    )

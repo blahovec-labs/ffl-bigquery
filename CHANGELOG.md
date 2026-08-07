@@ -2,6 +2,101 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.3.0 — 2026-08-07
+
+Kicker fantasy scoring. Unlike the DST gap 0.2.0 closed, this one was invisible rather
+than empty: `ff_points_weekly` *does* publish kicker rows, and they are arithmetically
+complete — they just score **exactly 0.0**, every one of them. Measured 2026-08-07, 2024
+alone carries 569 kicker rows across 43 players summing to precisely zero. Nothing was
+broken upstream. The join was never wrong; the scoring was never computed, because
+`load_player_stats()` carries no kicking columns at all. A zero reads as a bad week, not
+as a missing feature, which is why the gap survived this long.
+
+### Added
+
+- `ff_points_k_weekly` — weekly kicker fantasy points at `(season, week, gsis_id)` grain,
+  derived from `load_pbp()` field-goal and extra-point attempts. Registered as the
+  eleventh season-chunked table, so it syncs through the existing `sync-nflverse`. Scoring
+  convention: made FG **3/4/5** by distance tier (≤39 / 40–49 / 50+), made XP **1**, missed
+  **or blocked** FG **−1**, missed **or blocked** XP **0**, aborted XP **unattributed**.
+  Points are scored per attempt and then summed, never re-derived from the counts — three
+  made field goals are worth anywhere from 9 to 15 points, so the tier is information the
+  counts cannot carry. Every scored component ships beside the total anyway, so a league on
+  other rules re-derives totals from this table instead of re-deriving the table.
+- `sync-kickers` — `sync-nflverse` with `--tables` pinned to `ff_points_k_weekly`, sharing
+  the driver, run log and chunk isolation verbatim. It exists because this is the table an
+  operator re-runs on its own, and reaching it through `sync-nflverse` otherwise costs a
+  27-season round trip through the other ten.
+- `verify --checks kicker` — four guards, each independently falsifiable, each on its own
+  labelled line. **Recomputation:** per-season component counts recomputed from `nfl_plays`
+  in SQL, importing nothing from the transform and *restating* the tier weights rather than
+  sharing them, so a rules change has to be made twice on purpose and until it is this is a
+  second opinion instead of an echo. It counts attempts **without** a kicker-id predicate,
+  deliberately, so an attempt the transform drops surfaces as a disagreement rather than as
+  a quietly smaller table. **Per-season floors:** no component may fall below its floor,
+  the only guard that survives an upstream column *rename* (an absent column reads as
+  all-zeros, and both sides would agree on the zero). **Tier sanity:** a week's total must
+  be reachable given its own components and its longest made kick. **Coverage:** every
+  kicker with attempts in the play-by-play must have rows, with the denominator taken from
+  `nfl_plays` — never from the table being checked. `--plays-table` is required, not
+  optional: that independence *is* the check.
+
+### Fixed
+
+- **`_version.py` was left at `0.1.0` by the 0.2.0 release.** `--version`, the HTTP
+  User-Agent and every run log's `library_version` column read that file, so all of 0.2.0's
+  run rows are stamped `0.1.0` and cannot be distinguished from 0.1.0's. Both files now say
+  `0.3.0`, and a test pins them to each other — nothing else could see the drift, because
+  each file was internally consistent.
+
+### Derivation notes
+
+- **An aborted extra point is charged to nobody.** `extra_point_result='aborted'` occurs 31
+  times across 1999–2025 (11 seasons, 2002–2014) and `kicker_player_id` is **NULL on every
+  one**: a botched snap or hold, no kick attempted, so nflverse attributes no kicker. It is
+  counted as **neither made nor missed** — putting it in `xp_missed` would penalise a player
+  who did nothing, and it sits outside the verifier's buckets on both sides, so the counts
+  still reconcile. The transform excludes null-kicker attempts before scoring (that is the
+  grain, not a data-quality filter) and `kicker_scoring` additionally scores an attributed
+  abort at `0.0`, so a future season that *does* attribute one cannot kill a backfill. Every
+  other unrecognised result string still raises: that fail-loud behaviour is what found this
+  case, and an aborted *field goal* still raises, because `field_goal_result` carries only
+  `made` (22,991), `missed` (4,195) and `blocked` (587) across all 27 seasons.
+- **The kicker is `kicker_player_id`, never inferred from `posteam`.** `kicker_player_id` is
+  populated on kickoffs and punts too, and nflverse's `posteam` means different things on
+  those plays (on a kickoff it is the *receiving* team) — the same orientation flip that
+  cost 0.2.0 two Criticals. Only field-goal and extra-point attempts are read, and on those
+  `posteam` is unambiguously the kicking team, so it is safe as a label but is never part of
+  the key.
+- **A blocked kick is still the kicker's attempt.** Blocked FGs take the miss penalty and
+  blocked XPs score zero; neither is filtered out. Dropping them would quietly inflate every
+  kicker who had one (19 blocked FGs and 13 blocked XPs in 2024) and would do it invisibly,
+  because the total would still look plausible.
+- **The scoring convention is swappable by replacing `derive/kicker_scoring.py` alone** —
+  pure functions, no pandas, no I/O, no BigQuery. The tier table and the four point values
+  live nowhere else in the transform.
+- **The shipped floors are not the plan's original 1,000 made FGs / 1,200 XPs.** Measured
+  minima across 1999–2025 are far lower than a recent season suggests (2024: 982 and 1,245):
+  `fg_made` **731** (2004), `fg_missed` **140** (2013), `xp_made` **1,055** (2001),
+  `xp_missed` **5** (2013, before the 2015 XP-distance change). A 1,000 floor would fire on
+  22 of 27 healthy seasons, and a guard that fails on healthy data gets switched off. The
+  shipped floors — `fg_made` 500, `fg_missed` 90, `xp_made` 700, `xp_missed` 1 — sit below
+  every measured minimum and strictly above zero, and a season with too few distinct weeks
+  to judge is announced and skipped rather than falsely flagged.
+
+### Known limitations
+
+- **This table covers REG + POST; `ff_points_dst_weekly` is REG only.** The siblings
+  genuinely disagree. The kicker table follows `load_pbp()`'s own coverage, matching
+  `ff_points_weekly` — the table it exists to complete — so a join between the two does not
+  silently drop January. The DST table derives its row set from `load_schedules()` filtered
+  to `game_type='REG'`. Weeks 19+ exist in one and not the other.
+- **A kicker who attempted nothing in a week has no row**, as opposed to a 0.0 row: the
+  play-by-play cannot distinguish "inactive" from "never got in range", and only the latter
+  is honestly a zero.
+- **Not yet backfilled.** The table, its transform, its command and its guards ship here;
+  the 1999–2025 backfill is an operator run.
+
 ## 0.2.0 — 2026-08-05
 
 Team-defense fantasy scoring. `ff_points_weekly` covers players only (it derives from

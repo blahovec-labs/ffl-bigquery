@@ -33,7 +33,7 @@ Pass `--resume` to skip chunks already recorded `success` or `empty`.
 
 ## What it writes
 
-14 tables plus 2 run logs. Row counts below are measured from a real backfill against
+15 tables plus 2 run logs. Row counts below are measured from a real backfill against
 live BigQuery (not estimates); `nfl_coordinators` is opt-in and its count depends on what
 you choose to fetch.
 
@@ -50,20 +50,107 @@ you choose to fetch.
 | `ftn_charting` | 185,215 | 2022–2025 | `sync-nflverse` |
 | `nfl_coaches` | 15,096 | 1999–2026 | `sync-nflverse` |
 | `ff_points_weekly` | 476,156 | 1999–2025 | `sync-nflverse` |
-| `ff_points_dst_weekly` | not yet backfilled | 1999–2025 | `sync-nflverse` |
+| `ff_points_dst_weekly` | not yet backfilled | 1999–2025 (REG only) | `sync-nflverse` |
+| `ff_points_k_weekly` | not yet backfilled | 1999–2025 (REG + POST) | `sync-nflverse` / `sync-kickers` |
 | `team_scheme_week` | 14,546 | 1999–2025 | `sync-nflverse` |
 | `nfl_coordinators` | opt-in, 46.2% measured fill | 2010–2025 (as backfilled) | `sync-coordinators` |
 | `_ffl_ingest_runs` | run log, keyed `(source, season, scoring_format, teams)` | — | `sync-adp` |
 | `_ffl_nflverse_runs` | run log, keyed `(table_name, season)` | — | `sync-nflverse` |
 
-That's ~3.5M rows across the thirteen non-opt-in tables. Ten of the fourteen
+That's ~3.5M rows across the fourteen non-opt-in tables. Eleven of the fifteen
 (`ff_opportunity`, `snap_counts`, `injuries`, `depth_charts`, `participation`,
-`ftn_charting`, `nfl_coaches`, `ff_points_weekly`, `ff_points_dst_weekly`, `team_scheme_week`) share one driver —
+`ftn_charting`, `nfl_coaches`, `ff_points_weekly`, `ff_points_dst_weekly`,
+`ff_points_k_weekly`, `team_scheme_week`) share one driver —
 `sync-nflverse` — because they're all the same shape: load a frame for season *S*, align
 it to a schema, replace that season. `ff_adp` and `nfl_coordinators` are chunked
 differently (by source/format and by team-season respectively) because their upstreams
 are; `ff_player_xref` and `ff_rankings` aren't season-chunked at all — they're
 whole-table/current-snapshot syncs.
+
+### The two scoring tables `ff_points_weekly` cannot produce
+
+`ff_points_weekly` derives from `load_player_stats()`, and that frame covers offensive
+skill players only. Two fantasy roster slots therefore had nothing to join to, each for a
+different reason, and each gets its own table derived from `load_pbp()`:
+
+- **`ff_points_dst_weekly`** — team defenses had no rows at all. Regular season only, at
+  `(season, week, team)` grain.
+- **`ff_points_k_weekly`** — kickers had rows that were **always wrong in the same
+  direction**: `ff_points_weekly` publishes K rows, they are arithmetically complete, and
+  they score **exactly 0.0**. Measured 2026-08-07: 2024 alone carries 569 kicker rows
+  across 43 players summing to precisely zero. Nothing upstream is broken — the join was
+  never wrong, the scoring was simply never computed, because `load_player_stats()` carries
+  no kicking columns whatsoever. A zero reads as a bad week, not as a missing feature,
+  which is why the gap survived this long. This table is not redundant with those rows; it
+  is the only place kicker points exist.
+
+`ff_points_k_weekly` is one row per `(season, week, gsis_id)` — the grain is the **kicker**,
+read off `kicker_player_id`, never inferred from `posteam` (on a kickoff `posteam` is the
+receiving team; that orientation flip cost the DST build two Criticals). It ships every
+scored component beside the total (`fg_made`, `fg_missed`, `fg_made_yards_max`, `xp_made`,
+`xp_missed`, `fantasy_points_kicker`), so a league on other rules re-derives totals from
+this table instead of re-deriving the table.
+
+The scoring convention it encodes:
+
+| Event | Points |
+| --- | --- |
+| Field goal made, 0–39 yards | **3** |
+| Field goal made, 40–49 yards | **4** |
+| Field goal made, 50+ yards | **5** |
+| Field goal missed **or blocked** | **−1** |
+| Extra point made | **1** |
+| Extra point missed **or blocked** | **0** (no penalty, but the attempt is still counted) |
+| Extra point **aborted** | **unattributed** — scored for nobody, counted as neither made nor missed |
+
+Points are scored per *attempt* and then summed, never re-derived from the counts: three
+made field goals are worth anywhere from 9 to 15 points, so the distance tier is
+information the count columns do not carry. A blocked kick stays in as the kicker's own
+attempt rather than being filtered out — dropping it would quietly inflate every kicker
+who had one. An **aborted** extra point (a botched snap or hold) is the one attempt charged
+to no one: nflverse attributes no kicker to it, and all 31 across 1999–2025 (11 seasons,
+2002–2014) carry a NULL `kicker_player_id`. Charging it as a miss would penalise a player
+who did nothing.
+
+That convention is **swappable by replacing `ffl_bigquery/derive/kicker_scoring.py` alone**
+— pure functions, no pandas, no I/O, no BigQuery. The tier table and the four point values
+live nowhere else in the transform.
+
+Two scope notes worth having before you join anything:
+
+- **`ff_points_k_weekly` covers REG + POST; `ff_points_dst_weekly` is REG only.** The
+  siblings genuinely disagree. The kicker table follows `load_pbp()`'s own coverage, which
+  is what `ff_points_weekly` does too, so a kicker join against the player table does not
+  silently drop January. The DST table derives its row set from `load_schedules()` filtered
+  to `game_type='REG'`. Weeks 19+ therefore exist in one and not the other.
+- A kicker who attempted nothing in a week gets **no row**, not a 0.0 row: the play-by-play
+  cannot tell "inactive" from "never got in range", and only the latter is honestly a zero.
+
+Sync it with either command — `sync-kickers` is `sync-nflverse` pinned to this one table,
+sharing the driver, run log and chunk isolation verbatim, because this is the table an
+operator re-runs on its own rather than paying a 27-season round trip through the other ten:
+
+    ffl-bigquery sync-kickers --dataset PROJECT.DATASET --seasons 1999-2025 --resume
+
+    ffl-bigquery verify --checks kicker \
+      --kicker-table PROJECT.DATASET.ff_points_k_weekly \
+      --plays-table PROJECT.DATASET.nfl_plays
+
+`--checks kicker` runs four guards, each falsifiable on its own and each reporting on its
+own labelled line. `--plays-table` (an `nfl_plays` table from
+[`nfl-bigquery`](https://github.com/blahovec-labs/nfl-bigquery)) is **required**, not
+optional: the first guard recomputes every component count straight from the play-by-play
+in SQL, importing nothing from the transform and restating the tier weights rather than
+sharing them, and it counts attempts *without* a kicker-id predicate so an attempt the
+transform drops shows up as a disagreement instead of as a quietly smaller table. The
+per-season floors are the second guard, and they are deliberately **not** the round
+"1,000 made FGs / 1,200 XPs" a recent season suggests (2024: 982 and 1,245). Measured
+minima across 1999–2025 are far lower — `fg_made` 731 (2004), `xp_made` 1,055 (2001),
+`fg_missed` 140 (2013), `xp_missed` **5** (2013, before the 2015 XP-distance change) — so
+a 1,000 floor would fire on 22 of 27 healthy seasons, and a guard that fails on healthy
+data gets switched off. The shipped floors are `fg_made` 500, `fg_missed` 90, `xp_made` 700,
+`xp_missed` 1: below every measured minimum, strictly above zero, and skipped entirely for
+a season with too few distinct weeks to judge.
 
 `team_scheme_week` is the marquee derived table: a per-`(season, week, team)` scheme
 fingerprint (shotgun/no-huddle/pass rate/PROE/EPA, personnel groupings, coverage/pressure,
@@ -139,7 +226,7 @@ got wrong and this backfill corrected (MFL's true start season, and FFC's missin
 
     ffl-bigquery sync-xref --xref-table PROJECT.DATASET.ff_player_xref
 
-    # the ten season-chunked nflverse/derived tables, one dataset, one command
+    # the eleven season-chunked nflverse/derived tables, one dataset, one command
     ffl-bigquery sync-nflverse --dataset PROJECT.DATASET --seasons 1999-2025 --resume
 
     # a subset, if you only want a few
@@ -148,6 +235,9 @@ got wrong and this backfill corrected (MFL's true start season, and FFC's missin
 
     # current ECR snapshot -- not season-chunked
     ffl-bigquery sync-rankings --rankings-table PROJECT.DATASET.ff_rankings
+
+    # ff_points_k_weekly on its own -- sync-nflverse pinned to that one table
+    ffl-bigquery sync-kickers --dataset PROJECT.DATASET --seasons 1999-2025 --resume
 
     # opt-in, 46.2% measured fill -- never part of sync-nflverse
     ffl-bigquery sync-coordinators \
@@ -163,6 +253,9 @@ got wrong and this backfill corrected (MFL's true start season, and FFC's missin
       --participation-table PROJECT.DATASET.participation
     ffl-bigquery verify --checks dst --dst-table PROJECT.DATASET.ff_points_dst_weekly \
       --adp-table PROJECT.DATASET.ff_adp
+    ffl-bigquery verify --checks kicker \
+      --kicker-table PROJECT.DATASET.ff_points_k_weekly \
+      --plays-table PROJECT.DATASET.nfl_plays
 
 Notes:
 
@@ -170,7 +263,7 @@ Notes:
   upstream source degrades coverage instead of aborting the run; `--resume` skips chunks
   already recorded `success` or `empty` in `_ffl_ingest_runs`.
 - `sync-nflverse` derives each table's ref as `project.dataset.<name>` from a single
-  `--dataset` — no per-table flags needed. `--tables` defaults to all ten and is
+  `--dataset` — no per-table flags needed. `--tables` defaults to all eleven and is
   validated against the known registry before any fetch, so a typo fails fast. Its
   `--resume` reads `_ffl_nflverse_runs`, a second run log keyed `(table_name, season)`
   — deliberately separate from ADP's `(source, season, scoring_format, teams)` log rather
@@ -186,10 +279,16 @@ Notes:
   throttles the delay between requests to third-party sources — the minimum respectful
   spacing backing FFC's "do not poll frequently" terms and general politeness toward
   Wikipedia's API; see Data sources & attribution below.
+- `sync-kickers` is `sync-nflverse` with `--tables` pinned to `ff_points_k_weekly` — same
+  driver, same run log, same chunk isolation, and the table cannot be pointed elsewhere. It
+  exists because that table is the one an operator re-runs by itself, and reaching it
+  through `sync-nflverse` otherwise means a 27-season round trip through the other ten.
 - `verify --checks` accepts a comma-separated subset of `adp`, `points-weekly`,
-  `scheme-denominators`, `participation-coverage`, `dst`. Each group validates its own required
-  flags at dispatch time (e.g. `scheme-denominators` needs `--scheme-week-table` and
-  `--season`) rather than making every flag globally required. `--min-resolution-rate`
+  `scheme-denominators`, `participation-coverage`, `dst`, `kicker`. Each group validates its
+  own required flags at dispatch time (e.g. `scheme-denominators` needs `--scheme-week-table`
+  and `--season`) rather than making every flag globally required. `kicker` requires BOTH
+  `--kicker-table` and `--plays-table`; the second is not optional, because recomputing the
+  expected counts from the play-by-play independently IS the check. `--min-resolution-rate`
   (default `0.60`) and `--ppr-tolerance` (default `0.01`) are the two numeric knobs.
 - `sync-adp`, `sync-xref`, `sync-nflverse`, and `sync-coordinators` all accept `--dry-run`
   to print what would happen without writing or fetching.
