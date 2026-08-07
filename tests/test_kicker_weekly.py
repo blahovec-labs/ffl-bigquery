@@ -157,6 +157,44 @@ def test_a_blocked_extra_point_costs_nothing_but_is_still_counted():
     assert row.fantasy_points_kicker == 0.0
 
 
+def test_an_aborted_extra_point_is_dropped_rather_than_charged_to_anyone():
+    """The real 2002-2014 shape: extra_point_result='aborted' with a NULL
+    kicker_player_id -- a botched snap or hold, no kick attempted, no kicker
+    attributed. 31 of them across 11 seasons; all 31 carry a null kicker id.
+
+    The numbers here discriminate three outcomes, not two. Counting the abort
+    as a miss gives xp_missed=2; keeping the null-id row gives len(out)=2 with
+    a <NA> gsis_id; only dropping it unattributed gives one row at 1/1.
+    """
+    pbp = _frame([
+        _xp("good"),
+        _xp("failed"),
+        _xp("aborted", kicker_player_id=None, kicker_player_name=None),
+    ])
+    out = derive_kicker_weekly(pbp, 2024)
+    assert len(out) == 1, "the unattributed abort must not become its own row"
+    row = out.iloc[0]
+    assert row.gsis_id == _KICKER
+    assert row.xp_made == 1
+    assert row.xp_missed == 1, "an abort is not a missed extra point"
+    assert row.fantasy_points_kicker == 1.0
+
+
+def test_an_attributed_aborted_extra_point_scores_zero_and_counts_as_neither():
+    """No season measured to date attributes an abort to a kicker -- but a
+    future one might, and a backfill must not die on it. Belt-and-braces to the
+    null-id exclusion above, and asserted separately because that exclusion
+    would mask this path entirely."""
+    pbp = _frame([_xp("good"), _xp("failed"), _xp("aborted")])
+    row = _one_row(pbp)
+    assert row.xp_made == 1
+    assert row.xp_missed == 1, "an abort is not a missed extra point"
+    # 1.0, not 1.0-minus-anything and not a raise. If the abort were bucketed
+    # as a miss this stays 1.0 too -- which is why xp_missed above, not this
+    # total, is what separates the two readings.
+    assert row.fantasy_points_kicker == 1.0
+
+
 def test_field_goal_points_are_tiered_by_distance():
     """Three makes, one per tier, scored separately so a flat per-make value
     cannot pass: 39 -> 3, 49 -> 4, 50+ -> 5."""

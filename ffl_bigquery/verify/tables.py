@@ -680,14 +680,18 @@ def check_kicker_counts_match_plays(table_rows, plays_rows):
       coverage state -- but this comparison SKIPS such a season entirely, so
       staying silent would hide the skip.
     * Attempts carrying no kicker id (measured: 5 in 2002, 4 in 2006/2007/2008,
-      down to 1 in 2014, 0 from 2015). If any of them fell in a scored bucket
-      the count comparison above already fails; this line explains why.
+      down to 1 in 2014, 0 from 2015; 31 across all 27 seasons, every one an
+      aborted extra point). If any of them fell in a scored bucket the count
+      comparison above already fails; this line explains why.
     * Attempts whose result string is outside the four scored buckets. nflverse
-      carries extra_point_result='aborted' in 2002-2014, which is in neither
-      xp_made nor xp_missed on EITHER side and therefore cannot surface as a
-      count disagreement -- but the scoring rules raise on it, so a backfill of
-      those seasons dies in the transform. Reported here so that failure is
-      expected rather than debugged cold.
+      carries extra_point_result='aborted' in 2002-2014 -- a botched snap or
+      hold, no kick attempted and no kicker attributed. It is in neither
+      xp_made nor xp_missed on EITHER side, so it cannot surface as a count
+      disagreement, and it is charged to nobody: the transform drops it on the
+      null kicker id and kicker_scoring scores an attributed one at 0.0.
+      Reported anyway, because "31 attempts exist in the source that this
+      table deliberately holds no row for" is exactly the kind of silent
+      subtraction this verifier exists to make visible.
 
     A season present in the table but absent from nfl_plays IS a finding, not a
     note: the table cannot hold kicks the play-by-play it derives from has
@@ -748,10 +752,11 @@ def check_kicker_counts_match_plays(table_rows, plays_rows):
             notes.append(
                 f"{season}: {unknown} kick attempt(s) in nfl_plays carry a "
                 "result string outside the four scored buckets (nflverse "
-                "carries extra_point_result='aborted' in 2002-2014). They land "
-                "in no bucket on either side, so they cannot show up as a "
-                "count disagreement -- but the scoring rules raise on them, so "
-                "a backfill of this season fails in the transform"
+                "carries extra_point_result='aborted' in 2002-2014 -- a "
+                "botched snap or hold, no kick and no kicker attributed). "
+                "They land in no bucket on either side, so they cannot show "
+                "up as a count disagreement; they are charged to nobody and "
+                "this table holds no row for them"
             )
 
     return findings, notes

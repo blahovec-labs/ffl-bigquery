@@ -12,6 +12,7 @@ from __future__ import annotations
 XP_POINTS = 1.0
 MISSED_FG_POINTS = -1.0  # a blocked FG counts as missed
 MISSED_XP_POINTS = 0.0  # no penalty, blocked or failed
+ABORTED_XP_POINTS = 0.0  # no kick, no kicker -- see extra_point_points
 
 # (inclusive_upper_bound_yards, points). Ordered ascending; the final entry's
 # bound is None, meaning "everything beyond the previous bound".
@@ -31,9 +32,12 @@ def field_goal_points(distance: float | None, result: str) -> float:
     missed or blocked kick with an unknown distance is fine -- the penalty
     doesn't depend on distance.
 
-    An unrecognised result string raises rather than scoring 0.0. nflverse
-    has carried values like 'aborted' in some seasons; treating an unknown
-    result as 0.0 would silently drop real kicks.
+    An unrecognised result string raises rather than scoring 0.0; treating an
+    unknown result as 0.0 would silently drop real kicks. field_goal_result
+    carries exactly three values across all 27 seasons -- made (22,991),
+    missed (4,195), blocked (587) -- so unlike `extra_point_points` there is no
+    measured fourth case here, and 'aborted' raises if it ever appears on a
+    field goal.
     """
     if result in ("missed", "blocked"):
         return MISSED_FG_POINTS
@@ -50,11 +54,27 @@ def field_goal_points(distance: float | None, result: str) -> float:
 def extra_point_points(result: str) -> float:
     """Points for a single extra-point attempt.
 
-    An unrecognised result string raises rather than scoring 0.0, for the
-    same reason as `field_goal_points`: a silent zero looks like real data.
+    'aborted' scores 0.0 and is counted as NEITHER made nor missed. It is a
+    botched snap or hold: no kick is attempted, and nflverse attributes no
+    kicker -- enumerated across all 27 seasons, extra_point_result='aborted'
+    occurs 31 times, in 11 seasons from 2002 to 2014, and kicker_player_id is
+    NULL on every one. Charging it as a missed extra point would penalise a
+    player who did nothing, and inflating anyone's attempt count would break
+    the reconciliation `verify --checks kicker` depends on. In practice the
+    null kicker id means derive_kicker_weekly excludes these plays before they
+    reach this function at all; the case is handled here as well so that a
+    future season which DOES attribute an abort cannot kill a backfill.
+
+    Any OTHER unrecognised result string still raises rather than scoring 0.0,
+    for the same reason as `field_goal_points`: a silent zero looks like real
+    data. That behaviour is what surfaced 'aborted' in the first place -- it
+    crashed a real season instead of quietly scoring it -- so it is narrowed by
+    exactly one measured value and no further.
     """
     if result == "good":
         return XP_POINTS
     if result in ("failed", "blocked"):
         return MISSED_XP_POINTS
+    if result == "aborted":
+        return ABORTED_XP_POINTS
     raise ValueError(f"unrecognised extra point result: {result!r}")

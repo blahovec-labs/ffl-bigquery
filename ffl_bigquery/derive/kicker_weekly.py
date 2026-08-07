@@ -88,10 +88,16 @@ FF_POINTS_K_WEEKLY_SCHEMA: list[ColumnSpec] = [
         "inferred from it.",
         "Measured on 2024: kicker_player_id is non-null on all 1,166 field- "
         "goal and 1,302 extra-point attempts, across 45 distinct kickers. An "
-        "attempt with a null kicker id would be dropped rather than grouped "
-        "under a null key; the verify check recounts attempts straight from "
-        "the play-by-play, so such a drop surfaces as a disagreement instead "
-        "of as a quietly smaller table."],
+        "attempt with a null kicker id is dropped rather than grouped under a "
+        "null key; the verify check recounts attempts straight from the "
+        "play-by-play WITHOUT a kicker-id predicate, so such a drop surfaces "
+        "as a disagreement instead of as a quietly smaller table.",
+        "Across all 27 seasons exactly 31 attempts carry a null kicker id, "
+        "every one an extra point with extra_point_result='aborted' (11 "
+        "seasons, 2002-2014). Those are unattributable rather than a data "
+        "error -- no kick was taken -- and they fall in none of the scored "
+        "buckets on either side, so excluding them leaves the reconciliation "
+        "at zero findings. Verified by execution on 2005 and 2012."],
        "kicker_player_id"),
     _c("player_name", "STRING", "NULLABLE", "Kicker display name.",
        "load_pbp()'s kicker_player_name for this kicker, taken from the "
@@ -156,7 +162,15 @@ FF_POINTS_K_WEEKLY_SCHEMA: list[ColumnSpec] = [
        ["metric"],
        ["Scores 0.0, which is NOT the same as being dropped: a dropped attempt "
         "breaks the reconciliation the verify check depends on. 2024 has 44 "
-        "failed and 13 blocked extra points."],
+        "failed and 13 blocked extra points.",
+        "extra_point_result='aborted' is NOT counted here and is not counted "
+        "as a make either -- it is a botched snap or hold, so no kick is "
+        "attempted and nflverse attributes no kicker. All 31 across 1999-2025 "
+        "(11 seasons, 2002-2014) carry a null kicker_player_id and are "
+        "excluded before scoring; charging one to xp_missed would penalise a "
+        "player who did nothing. The verify check's play-by-play side buckets "
+        "by result string, so 'aborted' is outside both buckets there too and "
+        "the counts still reconcile."],
        "extra_point_result"),
     _c("fantasy_points_kicker", "FLOAT64", "NULLABLE",
        "Total kicker fantasy points for the week.",
@@ -215,6 +229,27 @@ def _attempts(pbp: pd.DataFrame, result_col: str, kind: str) -> pd.DataFrame:
     allow-list of the outcomes we know how to score: an unfamiliar result
     string reaches kicker_scoring and raises there, instead of being filtered
     out here and disappearing from both the counts and the total at once.
+
+    The ONE exclusion is an attempt with a null `kicker_player_id`, and it is
+    not a data-quality filter -- it is the definition of the grain. Every row
+    of this table is keyed by a kicker; a play with no kicker has no row to
+    belong to, and grouping under a null key would publish a phantom
+    "kicker" holding other people's kicks.
+
+    Measured, all 27 seasons: exactly 31 kick attempts carry a null kicker id,
+    every one of them an extra point with extra_point_result='aborted', spread
+    over 11 seasons from 2002 to 2014 (5 in 2002, down to 1 in 2014, none from
+    2015 on). An aborted extra point is a botched snap or hold: no kick is
+    attempted, so nflverse attributes no kicker and there is nobody to charge
+    it to. It is counted as NEITHER made nor missed -- putting it in xp_missed
+    would penalise a player who did nothing, and would also break the count
+    reconciliation, since the verify check's play-by-play side buckets
+    extra points by result string and 'aborted' is in none of its buckets.
+
+    This is not a silent drop. `verify --checks kicker` recounts attempts from
+    nfl_plays WITHOUT a kicker-id predicate, precisely so that a real drop --
+    a scored attempt losing its id -- surfaces as a count disagreement; the
+    aborted plays sit in no scored bucket on either side, so they reconcile.
     """
     if pbp.empty or result_col not in pbp.columns:
         return pd.DataFrame(columns=_ATTEMPT_COLUMNS)  # type: ignore[arg-type]

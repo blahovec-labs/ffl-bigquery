@@ -132,10 +132,11 @@ def test_a_season_in_the_table_with_no_play_by_play_at_all_is_a_finding():
 
 def test_attempts_with_an_unrecognised_result_are_reported():
     """nflverse carries extra_point_result='aborted' in 2002-2014 (measured
-    2026-08-07 on live nfl_plays: 5 in 2002, 4 in 2006). It falls in none of
-    the four scored buckets on either side, so it cannot show up as a count
-    disagreement -- but derive/kicker_scoring.py RAISES on it, so a backfill of
-    those seasons dies. Silence here would leave that as a cold debug."""
+    2026-08-07 on live nfl_plays: 5 in 2002, 4 in 2006; 31 across all 27
+    seasons, all with a NULL kicker id). It falls in none of the four scored
+    buckets on either side, so it cannot show up as a count disagreement, and
+    the transform holds no row for it. Silence here would make those 31
+    attempts an invisible subtraction from the source."""
     _, notes = check_kicker_counts_match_plays(
         [_krow()], [_plays_row(unknown_result_attempts=5)],
     )
