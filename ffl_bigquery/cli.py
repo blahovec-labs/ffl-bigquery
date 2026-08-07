@@ -33,17 +33,36 @@ def build_parser() -> argparse.ArgumentParser:
     sx.add_argument("--dry-run", action="store_true")
 
     sn = sub.add_parser(
-        "sync-nflverse", help="Sync the ten season-chunked nflverse/derived tables"
+        "sync-nflverse", help="Sync the eleven season-chunked nflverse/derived tables"
     )
     sn.add_argument("--seasons", default="latest",
                     help="e.g. 1999-2025 | 2015,2020 | 2024 | latest")
     sn.add_argument("--dataset", required=True,
                     help="project.dataset -- each table lands at project.dataset.<name>")
     sn.add_argument("--tables", default=None,
-                    help="comma-separated subset of table names; default is all ten")
+                    help="comma-separated subset of table names; default is all eleven")
     sn.add_argument("--runs-table", default=None)
     sn.add_argument("--resume", action="store_true")
     sn.add_argument("--dry-run", action="store_true")
+
+    # sync-nflverse scoped to the one table, not a second sync path: the driver
+    # (chunk isolation, run log, season guard) is shared verbatim. It exists
+    # because ff_points_k_weekly is the table an operator re-runs on its own --
+    # it is the newest, it is the one whose transform raises on an unrecognised
+    # kick result, and re-running the other ten to reach it is a 27-season
+    # round trip.
+    sk = sub.add_parser(
+        "sync-kickers",
+        help="Sync ff_points_k_weekly (sync-nflverse scoped to that one table)",
+    )
+    sk.add_argument("--seasons", default="latest",
+                    help="e.g. 1999-2025 | 2015,2020 | 2024 | latest")
+    sk.add_argument("--dataset", required=True,
+                    help="project.dataset -- the table lands at "
+                         "project.dataset.ff_points_k_weekly")
+    sk.add_argument("--runs-table", default=None)
+    sk.add_argument("--resume", action="store_true")
+    sk.add_argument("--dry-run", action="store_true")
 
     sr = sub.add_parser("sync-rankings", help="Sync ff_rankings (current ECR snapshot)")
     sr.add_argument("--rankings-table", required=True, help="project.dataset.ff_rankings")
@@ -65,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     vf = sub.add_parser("verify", help="Run ffl-bigquery data-quality checks")
     vf.add_argument("--checks", default="adp",
                     help="comma-separated subset of adp,points-weekly,"
-                         "scheme-denominators,participation-coverage,dst")
+                         "scheme-denominators,participation-coverage,dst,kicker")
     vf.add_argument("--season", type=int, default=None,
                     help="required by the adp/points-weekly/scheme-denominators checks")
     vf.add_argument("--adp-table", default=None)
@@ -77,6 +96,15 @@ def build_parser() -> argparse.ArgumentParser:
     vf.add_argument("--participation-table", default=None)
     vf.add_argument("--dst-table", default=None,
                     help="project.dataset.ff_points_dst_weekly")
+    vf.add_argument("--kicker-table", default=None,
+                    help="project.dataset.ff_points_k_weekly")
+    # Required by --checks kicker, not optional like --adp-table is for dst:
+    # the kicker guards recompute their expected counts from the play-by-play,
+    # and that independence is the check.
+    vf.add_argument("--plays-table", default=None,
+                    help="project.dataset.nfl_plays (nfl-bigquery) -- required "
+                         "by --checks kicker, which recomputes the expected "
+                         "counts from it independently of the transform")
 
     return parser
 
@@ -111,6 +139,19 @@ def main(argv: list[str] | None = None) -> int:
 
         from ffl_bigquery.nflverse.driver import run_sync_nflverse_cli
 
+        # No client for a dry run -- see run_sync_nflverse_cli.
+        return run_sync_nflverse_cli(
+            ns, bq_client=None if ns.dry_run else bigquery.Client()
+        )
+
+    if ns.command == "sync-kickers":
+        from google.cloud import bigquery
+
+        from ffl_bigquery.nflverse.driver import run_sync_nflverse_cli
+
+        # The whole difference from sync-nflverse. Set here rather than as an
+        # argparse default so the command cannot be pointed at another table.
+        ns.tables = "ff_points_k_weekly"
         # No client for a dry run -- see run_sync_nflverse_cli.
         return run_sync_nflverse_cli(
             ns, bq_client=None if ns.dry_run else bigquery.Client()

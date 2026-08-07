@@ -12,6 +12,7 @@ import argparse
 
 CHECK_GROUPS = (
     "adp", "points-weekly", "scheme-denominators", "participation-coverage", "dst",
+    "kicker",
 )
 
 
@@ -64,5 +65,19 @@ def run_verify_cli(ns: argparse.Namespace, *, bq_client) -> int:
             raise ValueError("--checks dst requires --dst-table")
         from ffl_bigquery.verify.tables import run_verify_dst
         any_failed = run_verify_dst(ns, bq_client=bq_client) != 0 or any_failed
+
+    if "kicker" in checks:
+        # --plays-table is required, unlike the dst group's optional
+        # --adp-table: two of the four kicker guards recompute the expected
+        # counts straight from nfl_plays, and that independent recomputation is
+        # the entire point of the check. An independence guard one omitted flag
+        # away from not running -- while the summary still prints clean -- is
+        # the failure mode ff_points_dst_weekly already shipped once.
+        if not ns.kicker_table or not ns.plays_table:
+            raise ValueError(
+                "--checks kicker requires --kicker-table and --plays-table"
+            )
+        from ffl_bigquery.verify.tables import run_verify_kicker
+        any_failed = run_verify_kicker(ns, bq_client=bq_client) != 0 or any_failed
 
     return 1 if any_failed else 0

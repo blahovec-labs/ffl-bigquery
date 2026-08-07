@@ -11,9 +11,9 @@ def test_all_table_names_matches_loaded_spec_names_in_order():
     assert [s.name for s in specs] == list(ALL_TABLE_NAMES)
 
 
-def test_all_table_names_has_ten_entries_and_no_duplicates():
-    assert len(ALL_TABLE_NAMES) == 10
-    assert len(set(ALL_TABLE_NAMES)) == 10
+def test_all_table_names_has_eleven_entries_and_no_duplicates():
+    assert len(ALL_TABLE_NAMES) == 11
+    assert len(set(ALL_TABLE_NAMES)) == 11
 
 
 def test_coordinators_is_not_in_the_registry():
@@ -28,6 +28,15 @@ def test_dst_weekly_is_registered():
     assert "ff_points_dst_weekly" in ALL_TABLE_NAMES
     specs = {s.name for s in load_all_specs()}
     assert "ff_points_dst_weekly" in specs
+
+
+def test_kicker_weekly_is_registered():
+    """Without this the spec exists but no CLI path can reach it: --tables
+    validation rejects the name, and it is absent from a default sync."""
+    from ffl_bigquery.nflverse.tables import ALL_TABLE_NAMES, load_all_specs
+    assert "ff_points_k_weekly" in ALL_TABLE_NAMES
+    specs = {s.name for s in load_all_specs()}
+    assert "ff_points_k_weekly" in specs
 
 
 def test_dst_weekly_clusters_on_non_float_keys():

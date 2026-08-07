@@ -4,15 +4,15 @@
 can be validated (and a typo reported with the full valid list, the same
 posture `sync-adp` takes for `--sources`) without paying the cost of
 importing every spec module. Each spec module reads a parquet schema-sample
-at import time (`schema_gen.specs_from_frame`), so importing all ten
+at import time (`schema_gen.specs_from_frame`), so importing all eleven
 eagerly here would mean importing this registry module breaks `--version`/
 `--help` on an installation without the dev fixtures on disk. `load_all_specs`
 performs those imports, deferred to the caller that actually needs to run a
 sync -- exactly the posture `cli.py`'s own lazy imports inside `main()` take
 for `google.cloud.bigquery`.
 
-Note: `nfl_coaches`/`ff_points_weekly`/`team_scheme_week`/`ff_points_dst_weekly`
-live under `ffl_bigquery.coaches`/`ffl_bigquery.derive`, not
+Note: `nfl_coaches`/`ff_points_weekly`/`team_scheme_week`/`ff_points_dst_weekly`/
+`ff_points_k_weekly` live under `ffl_bigquery.coaches`/`ffl_bigquery.derive`, not
 `ffl_bigquery.nflverse.tables` -- this registry aggregates every
 season-chunked NflverseTableSpec regardless of which subpackage defines it.
 `nfl_coordinators` (`ffl_bigquery.coordinators`) is deliberately absent: it's
@@ -35,6 +35,7 @@ ALL_TABLE_NAMES: list[str] = [
     "ff_points_weekly",
     "team_scheme_week",
     "ff_points_dst_weekly",
+    "ff_points_k_weekly",
 ]
 
 
@@ -43,6 +44,7 @@ def load_all_specs() -> list[NflverseTableSpec]:
     order as ALL_TABLE_NAMES."""
     from ffl_bigquery.coaches.sync import COACHES_SPEC
     from ffl_bigquery.derive.dst_weekly import DST_WEEKLY_SPEC
+    from ffl_bigquery.derive.kicker_weekly import KICKER_WEEKLY_SPEC
     from ffl_bigquery.derive.points_weekly import POINTS_WEEKLY_SPEC
     from ffl_bigquery.derive.scheme_week import SCHEME_WEEK_SPEC
     from ffl_bigquery.nflverse.tables.depth_charts import DEPTH_CHARTS_SPEC
@@ -63,4 +65,5 @@ def load_all_specs() -> list[NflverseTableSpec]:
         POINTS_WEEKLY_SPEC,
         SCHEME_WEEK_SPEC,
         DST_WEEKLY_SPEC,
+        KICKER_WEEKLY_SPEC,
     ]

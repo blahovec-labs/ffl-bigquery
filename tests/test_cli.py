@@ -109,6 +109,48 @@ def test_sync_rankings_parses_table():
     assert ns.rankings_table == "p.d.ff_rankings"
 
 
+def test_sync_kickers_requires_dataset():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["sync-kickers"])
+
+
+def test_sync_kickers_defaults():
+    ns = build_parser().parse_args(["sync-kickers", "--dataset", "p.d"])
+    assert ns.seasons == "latest"
+    assert ns.dataset == "p.d"
+    assert ns.runs_table is None
+    assert ns.resume is False
+    assert ns.dry_run is False
+
+
+def test_sync_kickers_is_the_kicker_table_only(monkeypatch):
+    """sync-kickers is sync-nflverse scoped to one table -- it must reach the
+    same driver (chunk isolation, run log, season guard) rather than growing a
+    second sync path, and it must not be able to drive any other table."""
+    seen = {}
+
+    def fake_driver(ns, *, bq_client):
+        seen["tables"] = ns.tables
+        seen["client"] = bq_client
+        return 0
+
+    monkeypatch.setattr(
+        "ffl_bigquery.nflverse.driver.run_sync_nflverse_cli", fake_driver,
+    )
+    assert main(["sync-kickers", "--dataset", "p.d", "--dry-run"]) == 0
+    assert seen["tables"] == "ff_points_k_weekly"
+    # A dry run must not construct a BigQuery client: that needs Application
+    # Default Credentials, which the release workflow's wheel smoke test does
+    # not have.
+    assert seen["client"] is None
+
+
+def test_kicker_weekly_is_a_valid_sync_nflverse_table():
+    from ffl_bigquery.nflverse.tables import ALL_TABLE_NAMES
+
+    assert "ff_points_k_weekly" in ALL_TABLE_NAMES
+
+
 def test_verify_defaults_to_the_adp_check_only():
     ns = build_parser().parse_args(["verify"])
     assert ns.checks == "adp"
@@ -126,3 +168,14 @@ def test_verify_accepts_new_check_flags():
     assert ns.points_weekly_table == "p.d.ff_points_weekly"
     assert ns.scheme_week_table == "p.d.team_scheme_week"
     assert ns.ppr_tolerance == 0.05
+
+
+def test_verify_accepts_the_kicker_check_flags():
+    ns = build_parser().parse_args([
+        "verify", "--checks", "kicker",
+        "--kicker-table", "p.d.ff_points_k_weekly",
+        "--plays-table", "p.d.nfl_plays",
+    ])
+    assert ns.checks == "kicker"
+    assert ns.kicker_table == "p.d.ff_points_k_weekly"
+    assert ns.plays_table == "p.d.nfl_plays"

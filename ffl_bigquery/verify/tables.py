@@ -29,6 +29,7 @@ rows" is detected via that zero count, not via an empty result set.
 from __future__ import annotations
 
 import argparse
+import re
 
 from ffl_bigquery.derive.dst_scoring import (
     BLOCKED_KICK_POINTS,
@@ -582,4 +583,481 @@ def run_verify_dst(ns: argparse.Namespace, *, bq_client) -> int:
 
     return 1 if (
         findings or bonus_findings or floor_findings or coverage_findings
+    ) else 0
+
+
+# ---------------------------------------------------------------------------
+# ff_points_k_weekly. Four guards, and the reason they are shaped this way is
+# the DST verifier's original defect: it recomputed fantasy_points_dst from the
+# component columns THE SAME TRANSFORM had written, so both 0.2.0 attribution
+# Criticals reconciled to zero findings -- a wrong total perfectly consistent
+# with its own wrong components.
+#
+# So nothing below imports derive/kicker_weekly.py or its scoring rules. The
+# expected counts come from nfl_plays by a code path that shares nothing with
+# the transform, and the tier weights are RESTATED here rather than imported,
+# deliberately: a league-rules change must then be made twice, on purpose, and
+# until it is, this file is a second opinion instead of an echo.
+# ---------------------------------------------------------------------------
+
+_KICKER_COUNT_COLUMNS = ("fg_made", "fg_missed", "xp_made", "xp_missed")
+
+# Measured 2026-08-07 against live nfl_plays, per season 1999-2025, REG+POST:
+#
+#   component   min (season)   max (season)
+#   fg_made      731 (2004)     982 (2024)
+#   fg_missed    140 (2013)     236 (2001)
+#   xp_made     1055 (2001)    1298 (2020)
+#   xp_missed      5 (2013)      97 (2020)
+#
+# The floors sit below every one of those minima and strictly above zero --
+# the two-sided invariant a floor has to satisfy to be worth having, pinned by
+# test_the_floors_sit_below_every_measured_season_and_above_zero.
+#
+# Note these are NOT the "order of 1,000 made FGs and 1,200 XPs" a recent
+# season suggests (2024: 982 and 1245). A 1,000 floor fires on all 22 seasons
+# from 1999 to 2020, which is most of the backfill range -- and a guard that
+# fails on healthy data gets switched off.
+#
+# fg_made and xp_made are floored well above zero so a component that
+# COLLAPSES (rather than disappearing) is caught too. xp_missed cannot be:
+# before the 2015 rule change, whole seasons had as few as 5 league-wide, so
+# its floor is exactly "not zero" and nothing more.
+KICKER_SEASON_FLOORS: dict[str, int] = {
+    "fg_made": 500, "fg_missed": 90, "xp_made": 700, "xp_missed": 1,
+}
+
+# A complete season occupies 21 distinct weeks (17 REG + 4 POST) through 2020
+# and 22 (18 + 4) from 2021 -- measured, every season 1999-2025. Below that the
+# season is partial and the floors are meaningless, exactly as
+# check_dst_season_signal_floor skips a season with too few games played. Week
+# COUNT is the right gate here (unlike DST, whose row set comes from the
+# schedule and is fully populated before a game is played): these rows come
+# from kicks that actually happened, and a week is present iff someone kicked
+# in it, which is independent of any single component's value.
+_KICKER_FULL_SEASON_MIN_WEEKS = 21
+
+# Restated, not imported -- see this section header. (inclusive upper bound in
+# yards, points); anything beyond the last bound scores _KICKER_MAX_TIER.
+_KICKER_FG_TIER_BOUNDS: tuple[tuple[int, float], ...] = ((39, 3.0), (49, 4.0))
+_KICKER_MIN_TIER = 3.0
+_KICKER_MAX_TIER = 5.0
+_KICKER_XP_MADE_POINTS = 1.0
+_KICKER_FG_MISS_POINTS = -1.0
+_KICKER_EPS = 1e-6
+
+# load_pbp()'s kicker_player_id is a GSIS id. An id outside this shape is an
+# id-space problem, not a per-kicker gap -- see check_kicker_coverage.
+_GSIS_ID_PATTERN = re.compile(r"^00-\d+$")
+
+
+def _kicker_tier_ceiling(distance: float) -> float:
+    """Highest tier value a made kick of this distance can be worth."""
+    for bound, points in _KICKER_FG_TIER_BOUNDS:
+        if distance <= bound:
+            return points
+    return _KICKER_MAX_TIER
+
+
+def check_kicker_counts_match_plays(table_rows, plays_rows):
+    """Guard 1. Per-season component counts, table vs nfl_plays.
+
+    Returns (findings, notes). Only `findings` fails the check.
+
+    The independence that matters: `plays_rows` is a straight aggregate over
+    kick attempts in the play-by-play, computed in SQL, with no reference to
+    ff_points_k_weekly and -- critically -- NO requirement that the attempt
+    carry a kicker id. derive_kicker_weekly drops an attempt whose
+    kicker_player_id is null (it cannot key a row on a null), so a play-by-play
+    side that filtered the same way would drop the same rows and the loss would
+    reconcile to zero findings. Counting the two sides differently is the
+    entire point.
+
+    Three things are reported without failing, each on its own line, because
+    each reads exactly like a defect when it is not one:
+
+    * A season in nfl_plays with no rows in the table. A partial backfill is a
+      coverage state -- but this comparison SKIPS such a season entirely, so
+      staying silent would hide the skip.
+    * Attempts carrying no kicker id (measured: 5 in 2002, 4 in 2006/2007/2008,
+      down to 1 in 2014, 0 from 2015). If any of them fell in a scored bucket
+      the count comparison above already fails; this line explains why.
+    * Attempts whose result string is outside the four scored buckets. nflverse
+      carries extra_point_result='aborted' in 2002-2014, which is in neither
+      xp_made nor xp_missed on EITHER side and therefore cannot surface as a
+      count disagreement -- but the scoring rules raise on it, so a backfill of
+      those seasons dies in the transform. Reported here so that failure is
+      expected rather than debugged cold.
+
+    A season present in the table but absent from nfl_plays IS a finding, not a
+    note: the table cannot hold kicks the play-by-play it derives from has
+    never seen.
+    """
+    totals: dict[int, dict[str, int]] = {}
+    for r in table_rows:
+        season = int(r.season)
+        acc = totals.setdefault(season, dict.fromkeys(_KICKER_COUNT_COLUMNS, 0))
+        for col in _KICKER_COUNT_COLUMNS:
+            acc[col] += int(getattr(r, col, None) or 0)
+
+    plays = {int(r.season): r for r in plays_rows}
+
+    findings: list[str] = []
+    notes: list[str] = []
+
+    for season in sorted(totals):
+        p = plays.get(season)
+        if p is None:
+            findings.append(
+                f"{season}: the table has rows but nfl_plays has no kick "
+                "attempts at all for that season -- the table cannot hold "
+                "kicks its own source has never seen"
+            )
+            continue
+        for col in _KICKER_COUNT_COLUMNS:
+            actual = totals[season][col]
+            expected = int(getattr(p, col, None) or 0)
+            if actual != expected:
+                findings.append(
+                    f"{season}: {col} sums to {actual} in the table but "
+                    f"nfl_plays counts {expected} (difference "
+                    f"{actual - expected:+d})"
+                )
+
+    for season in sorted(plays):
+        p = plays[season]
+        if season not in totals:
+            attempts = sum(
+                int(getattr(p, col, None) or 0) for col in _KICKER_COUNT_COLUMNS
+            )
+            notes.append(
+                f"{season}: {attempts} scored kick attempt(s) in nfl_plays but "
+                "no rows in the table -- not backfilled, or its chunk failed; "
+                "this season is skipped by the comparison above"
+            )
+            continue
+        null_kicker = int(getattr(p, "attempts_null_kicker", None) or 0)
+        if null_kicker:
+            notes.append(
+                f"{season}: {null_kicker} kick attempt(s) in nfl_plays carry a "
+                "null kicker id and are dropped by the transform rather than "
+                "grouped under a null key"
+            )
+        unknown = int(getattr(p, "unknown_result_attempts", None) or 0)
+        if unknown:
+            notes.append(
+                f"{season}: {unknown} kick attempt(s) in nfl_plays carry a "
+                "result string outside the four scored buckets (nflverse "
+                "carries extra_point_result='aborted' in 2002-2014). They land "
+                "in no bucket on either side, so they cannot show up as a "
+                "count disagreement -- but the scoring rules raise on them, so "
+                "a backfill of this season fails in the transform"
+            )
+
+    return findings, notes
+
+
+def check_kicker_season_floors(
+    rows, *, floors: dict[str, int] | None = None,
+    min_weeks: int = _KICKER_FULL_SEASON_MIN_WEEKS,
+):
+    """Guard 2. No component may fall below its per-season floor.
+
+    Returns (findings, seasons skipped as too partial to judge).
+
+    This is the guard a reconciliation structurally cannot replace. If a
+    component stops arriving upstream -- a renamed nflverse column, a result
+    vocabulary that quietly changes -- the table and the play-by-play recount
+    can AGREE on the zero, because both read the same source. Only an absolute
+    expectation about what a football season contains can see it.
+
+    Gated on distinct weeks so a mid-season sync is skipped rather than
+    flagged: a guard that fails every week of September is a guard that gets
+    switched off. The gate is component-independent (a week is present iff
+    someone kicked in it), so a zeroed component cannot suppress the very check
+    that would catch it.
+    """
+    floors = KICKER_SEASON_FLOORS if floors is None else floors
+    totals: dict[int, dict[str, int]] = {}
+    weeks: dict[int, set] = {}
+    for r in rows:
+        season = int(r.season)
+        acc = totals.setdefault(season, dict.fromkeys(_KICKER_COUNT_COLUMNS, 0))
+        weeks.setdefault(season, set()).add(getattr(r, "week", None))
+        for col in _KICKER_COUNT_COLUMNS:
+            acc[col] += int(getattr(r, col, None) or 0)
+
+    findings: list[str] = []
+    skipped: list[int] = []
+    for season in sorted(totals):
+        n_weeks = len(weeks.get(season, set()))
+        if n_weeks < min_weeks:
+            skipped.append(season)
+            continue
+        for col, floor in floors.items():
+            actual = totals[season][col]
+            if actual < floor:
+                findings.append(
+                    f"{season}: {col} totals {actual} across the season, below "
+                    f"the floor of {floor} -- a component this far down is not "
+                    "a football outcome, it is a component that stopped "
+                    f"arriving ({n_weeks} distinct week(s) present)"
+                )
+    return findings, skipped
+
+
+def check_kicker_tier_sanity(rows) -> list[str]:
+    """Guard 3. Every row's total must be reachable from its own components.
+
+    Made field goals score 3, 4 or 5 by distance, misses -1, made extra points
+    1, missed extra points 0. Back out the field-goal points a row implies --
+    total + fg_missed - xp_made -- and it must be an integer in
+    [3 * fg_made, ceiling(longest make) * fg_made]. Because every tier value is
+    an integer, every integer in that band is reachable and none outside it is,
+    so the test is exact rather than approximate; with a single make it reduces
+    to "the total is that kick's tier value".
+
+    `fg_made_yards_max` tightens the ceiling, which is what makes this more
+    than an arithmetic identity: a week whose longest MADE kick was 30 yards
+    cannot contain a 5-point make, so two makes are worth exactly 6.
+
+    Deliberately per-row and self-contained: it needs neither the play-by-play
+    nor any other row, and it sees corruptions the per-season comparisons
+    average away.
+    """
+    findings: list[str] = []
+    for r in rows:
+        label = f"{r.season} wk{getattr(r, 'week', None)} {getattr(r, 'gsis_id', None)}"
+        counts = {c: getattr(r, c, None) for c in _KICKER_COUNT_COLUMNS}
+        nulls = [c for c, v in counts.items() if v is None]
+        if nulls:
+            findings.append(
+                f"{label}: null component column(s) {sorted(nulls)} -- the "
+                "row's total cannot be checked against components it does not "
+                "carry"
+            )
+            continue
+        total = getattr(r, "fantasy_points_kicker", None)
+        if total is None:
+            findings.append(f"{label}: fantasy_points_kicker is null")
+            continue
+        total = float(total)
+        # `or 0` is a type-narrowing no-op, not a null guard: the `nulls` check
+        # above has already reported and skipped any row with a null count.
+        fg_made = int(counts["fg_made"] or 0)
+        fg_missed = int(counts["fg_missed"] or 0)
+        xp_made = int(counts["xp_made"] or 0)
+        longest = getattr(r, "fg_made_yards_max", None)
+
+        if fg_made == 0 and longest is not None:
+            findings.append(
+                f"{label}: fg_made_yards_max={longest} with fg_made=0 -- a "
+                "longest MADE field goal for a kicker who made none"
+            )
+            continue
+        if fg_made > 0 and longest is None:
+            findings.append(
+                f"{label}: fg_made={fg_made} but fg_made_yards_max is null -- "
+                "the distance that selects the scoring tier is gone, so the "
+                "row's points cannot be checked at all"
+            )
+            continue
+
+        implied_fg = (
+            total - xp_made * _KICKER_XP_MADE_POINTS
+            - fg_missed * _KICKER_FG_MISS_POINTS
+        )
+        if abs(implied_fg - round(implied_fg)) > _KICKER_EPS:
+            findings.append(
+                f"{label}: fantasy_points_kicker={total} implies {implied_fg} "
+                "field-goal points, which is fractional -- every tier value and "
+                "weight is an integer, so no combination of them can produce it"
+            )
+            continue
+        lo = _KICKER_MIN_TIER * fg_made
+        # longest is None only when fg_made == 0 (both mismatches were reported
+        # and skipped above), so this is the fg_made == 0 branch too.
+        hi = (
+            _kicker_tier_ceiling(float(longest)) * fg_made
+            if longest is not None else 0.0
+        )
+        if not (lo - _KICKER_EPS <= implied_fg <= hi + _KICKER_EPS):
+            findings.append(
+                f"{label}: fantasy_points_kicker={total} implies {implied_fg} "
+                f"field-goal points from {fg_made} made field goal(s) with a "
+                f"longest make of {longest} yards, outside the reachable band "
+                f"[{lo}, {hi}]"
+            )
+    return findings
+
+
+def check_kicker_coverage(rows) -> tuple[list[str], list[str]]:
+    """Guard 4. Every kicker who attempted a kick must have rows for that
+    season.
+
+    Returns (findings, id_mismatches). Only `findings` fails the check.
+
+    The denominator is the set of kickers in nfl_plays -- NOT the set in
+    ff_points_k_weekly. A coverage check whose denominator is drawn from the
+    same filtered set as its numerator can only ever report zero, which is the
+    most comfortable kind of green there is. Rows reach this function through
+    an OUTER join from the play-by-play side (see run_verify_kicker's query),
+    bounded only by which SEASONS the table covers, never by which kickers it
+    covers.
+
+    Two classes that look identical from a zero row count alone:
+
+    * A GENUINE GAP (fails): a GSIS-shaped kicker id with attempts in the
+      play-by-play and no rows in the table. That is the transform dropping a
+      kicker.
+    * An ID MISMATCH (reported, does not fail): the attempt carries no kicker
+      id at all, or one outside the GSIS vocabulary. Such an attempt can never
+      have a row keyed by that id -- it is an upstream attribution hole rather
+      than a transform drop, and guard 1 is what makes its effect on the counts
+      visible. Measured: null kicker ids occur in most seasons from 2002 to
+      2014, so failing on them would take this guard down across a healthy
+      backfill.
+    """
+    findings: list[str] = []
+    mismatches: list[str] = []
+    for r in rows:
+        if int(getattr(r, "table_rows", None) or 0) > 0:
+            continue
+        gsis = getattr(r, "gsis_id", None)
+        attempts = int(getattr(r, "attempts", None) or 0)
+        if gsis is None or not _GSIS_ID_PATTERN.match(str(gsis)):
+            mismatches.append(
+                f"{r.season} {gsis!r}: {attempts} kick attempt(s) in nfl_plays "
+                "under an id outside the gsis vocabulary, so no row could be "
+                "keyed on it -- an upstream attribution hole, not a dropped "
+                "kicker"
+            )
+            continue
+        findings.append(
+            f"{r.season} {gsis}: {attempts} kick attempt(s) in nfl_plays but 0 "
+            "rows in ff_points_k_weekly"
+        )
+    return findings, mismatches
+
+
+def run_verify_kicker(ns: argparse.Namespace, *, bq_client) -> int:
+    """Runs all four kicker guards. --plays-table is REQUIRED (see
+    ffl_bigquery.verify.run_verify_cli): two of the four guards are the
+    independent recomputation this check exists for, and an independence guard
+    that can be skipped by omitting a flag -- while the summary still prints
+    clean -- is the failure this project has already paid for once.
+
+    Each guard prints its own labelled summary line, so a run says which guards
+    actually ran and what each concluded, and the two never-failing report
+    lines ([kicker][note] and [kicker][coverage-mismatch]) stay visible without
+    taking the check down.
+    """
+    kicker_table = str(TableRef.parse(ns.kicker_table))
+    plays_table = str(TableRef.parse(ns.plays_table))
+
+    rows = list(bq_client.query(f"""
+        SELECT season, week, gsis_id, fg_made, fg_missed, fg_made_yards_max,
+               xp_made, xp_missed, fantasy_points_kicker
+        FROM `{kicker_table}`
+    """).result())
+    if not rows:
+        # Same rule as verify/adp.py: an empty table is a failure, not a pass.
+        print(f"[kicker] no rows at all in {kicker_table} -- did the sync run?")
+        return 1
+
+    # Guard 1's expected side. No join to the table, no kicker-id predicate on
+    # the four scored components, and no season_type filter: ff_points_k_weekly
+    # follows load_pbp()'s own coverage (REG + POST) to match ff_points_weekly,
+    # unlike the REG-only ff_points_dst_weekly -- filtering here would disagree
+    # with the table by exactly the postseason kicks and read as a data bug.
+    plays_rows = list(bq_client.query(f"""
+        SELECT
+          season,
+          COUNTIF(field_goal_result = 'made') AS fg_made,
+          COUNTIF(field_goal_result IN ('missed', 'blocked')) AS fg_missed,
+          COUNTIF(extra_point_result = 'good') AS xp_made,
+          COUNTIF(extra_point_result IN ('failed', 'blocked')) AS xp_missed,
+          COUNTIF(kicker_player_id IS NULL) AS attempts_null_kicker,
+          COUNTIF(
+            field_goal_result IS NOT NULL
+            AND field_goal_result NOT IN ('made', 'missed', 'blocked')
+          ) + COUNTIF(
+            extra_point_result IS NOT NULL
+            AND extra_point_result NOT IN ('good', 'failed', 'blocked')
+          ) AS unknown_result_attempts
+        FROM `{plays_table}`
+        WHERE field_goal_result IS NOT NULL OR extra_point_result IS NOT NULL
+        GROUP BY season
+    """).result())
+    count_findings, notes = check_kicker_counts_match_plays(rows, plays_rows)
+    for f in count_findings:
+        print(f"[kicker][recompute] {f}")
+    print(
+        f"[kicker][recompute] {len(count_findings)} finding(s) comparing "
+        f"{len(_KICKER_COUNT_COLUMNS)} component count(s) per season against "
+        f"{plays_table}"
+    )
+    for n in notes:
+        print(f"[kicker][note] {n}")
+    print(
+        f"[kicker][note] {len(notes)} coverage/attribution note(s) -- reported, "
+        "not failed"
+    )
+
+    floor_findings, floor_skipped = check_kicker_season_floors(rows)
+    for f in floor_findings:
+        print(f"[kicker][floor] {f}")
+    print(
+        f"[kicker][floor] {len(floor_findings)} finding(s); "
+        f"{len(floor_skipped)} season(s) too partial to judge"
+        + (f" ({floor_skipped})" if floor_skipped else "")
+    )
+
+    tier_findings = check_kicker_tier_sanity(rows)
+    for f in tier_findings:
+        print(f"[kicker][tier] {f}")
+    print(
+        f"[kicker][tier] {len(tier_findings)} finding(s) across {len(rows)} row(s)"
+    )
+
+    # Guard 4. The kicker set comes from the play-by-play and reaches the table
+    # through a LEFT JOIN; `covered` bounds the comparison to SEASONS the table
+    # has rows for (without it, a table backfilled for one season reports every
+    # kicker of every other season as missing -- 1,100+ findings on healthy
+    # data), and bounds nothing else.
+    coverage_rows = list(bq_client.query(f"""
+        WITH attempts AS (
+          SELECT season, kicker_player_id AS gsis_id, COUNT(*) AS attempts
+          FROM `{plays_table}`
+          WHERE field_goal_result IS NOT NULL OR extra_point_result IS NOT NULL
+          GROUP BY season, kicker_player_id
+        ),
+        covered AS (
+          SELECT DISTINCT season FROM `{kicker_table}`
+        )
+        SELECT a.season, a.gsis_id, a.attempts, COUNT(k.gsis_id) AS table_rows
+        FROM attempts a
+        JOIN covered c ON c.season = a.season
+        LEFT JOIN `{kicker_table}` k
+          ON k.season = a.season AND k.gsis_id = a.gsis_id
+        GROUP BY a.season, a.gsis_id, a.attempts
+    """).result())
+    coverage_findings, coverage_mismatches = check_kicker_coverage(coverage_rows)
+    for f in coverage_findings:
+        print(f"[kicker][coverage] {f}")
+    print(
+        f"[kicker][coverage] {len(coverage_findings)} finding(s) across "
+        f"{len(coverage_rows)} (season, kicker) pair(s) that attempted a kick "
+        "in seasons this table covers"
+    )
+    for f in coverage_mismatches:
+        print(f"[kicker][coverage-mismatch] {f}")
+    print(
+        f"[kicker][coverage-mismatch] {len(coverage_mismatches)} id "
+        "mismatch(es) (no kicker id, or one outside the gsis vocabulary) -- "
+        "reported, not failed"
+    )
+
+    return 1 if (
+        count_findings or floor_findings or tier_findings or coverage_findings
     ) else 0
