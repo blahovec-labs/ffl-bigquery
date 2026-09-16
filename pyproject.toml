@@ -1,6 +1,6 @@
 [project]
 name = "ffl-bigquery"
-version = "0.3.0"
+version = "0.3.1"
 description = "Historical fantasy football ADP, usage, and coaching/scheme data → BigQuery: the fantasy layer on top of nfl-bigquery"
 readme = "README.md"
 license = { text = "MIT" }

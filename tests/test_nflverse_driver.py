@@ -1,10 +1,15 @@
 import argparse
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
 
-from ffl_bigquery.nflverse.driver import run_sync_nflverse, run_sync_nflverse_cli
+from ffl_bigquery.nflverse.driver import (
+    nflverse_season_for_latest,
+    run_sync_nflverse,
+    run_sync_nflverse_cli,
+)
 from ffl_bigquery.nflverse.spec import NflverseTableSpec
 from ffl_bigquery.schema import INGESTED_AT_SPEC, ColumnSpec
 from ffl_bigquery.writer import TableRef, WriteSeasonResult
@@ -388,3 +393,61 @@ def test_cli_dry_run_still_validates_tables_before_short_circuiting():
                    runs_table=None, resume=False, dry_run=True)
     with _pytest.raises(ValueError, match="unknown --tables"):
         run_sync_nflverse_cli(ns, bq_client=None)
+
+
+def test_nflverse_season_for_latest_january_is_prior_season():
+    """A January run is still the previous NFL season's postseason -- the label
+    doesn't roll over just because the calendar year did."""
+    now = datetime(2027, 1, 15, tzinfo=UTC)
+    assert nflverse_season_for_latest(now) == 2026
+
+
+def test_nflverse_season_for_latest_august_is_prior_season():
+    """One month before rollover: still the season that started last September."""
+    now = datetime(2026, 8, 31, tzinfo=UTC)
+    assert nflverse_season_for_latest(now) == 2025
+
+
+def test_nflverse_season_for_latest_september_is_current_season():
+    """September is when the new NFL season starts -- rollover happens here."""
+    now = datetime(2026, 9, 1, tzinfo=UTC)
+    assert nflverse_season_for_latest(now) == 2026
+
+
+def test_nflverse_season_for_latest_december_is_current_season():
+    now = datetime(2026, 12, 25, tzinfo=UTC)
+    assert nflverse_season_for_latest(now) == 2026
+
+
+def test_cli_seasons_latest_rolls_over_in_january_without_explicit_current_season():
+    """Regression for the rollover bug: without an injected current_season, the
+    CLI must still resolve 'latest' via nflverse_season_for_latest (September
+    rollover), not datetime.now(UTC).year (calendar-year rollover)."""
+    import ffl_bigquery.nflverse.driver as driver_mod
+
+    calls = []
+
+    def loader(season: int) -> pd.DataFrame:
+        calls.append(season)
+        return pd.DataFrame({"season": [season]})
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2027, 1, 15, tzinfo=tz)
+
+    original_datetime = driver_mod.datetime
+    driver_mod.datetime = _FrozenDatetime
+    try:
+        w, r = MagicMock(), MagicMock()
+        w.write_season.return_value = 1
+        r.completed_chunks.return_value = set()
+        r.record_success.return_value = True
+        run_sync_nflverse_cli(
+            _cli_ns(seasons="latest", tables="snap_counts"), bq_client=MagicMock(),
+            writer=w, runs=r,
+            load_specs=lambda: [_table(name="snap_counts", loader=loader)],
+        )
+    finally:
+        driver_mod.datetime = original_datetime
+    assert calls == [2026]

@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.3.1 — 2026-09-15
+
+Season rollover fix for `sync-nflverse --seasons latest`. `run_sync_nflverse_cli` was
+resolving "latest" as `datetime.now(UTC).year` — the calendar year. NFL seasons are
+labeled by the year they START, and the postseason runs into the following January/
+February, so a run on 2027-01-01 asked for season 2027 when the actual in-flight season
+was still 2026's playoffs. Left alone, the eleven season-chunked nflverse tables would
+have stopped refreshing 2026 mid-postseason and silently never picked up the 2026
+playoffs at all.
+
+### Fixed
+
+- `nflverse_season_for_latest(now)` in `ffl_bigquery/nflverse/driver.py` rolls the season
+  over in September (matching `nfl_bigquery.sync.current_season()` in the sibling
+  library), not on the calendar new year. `run_sync_nflverse_cli` now calls it instead of
+  reading `datetime.now(UTC).year` directly whenever the caller doesn't inject an explicit
+  `current_season`.
+- **Deliberately not applied to the ADP path.** `ffl_bigquery/adp/sync.py` still resolves
+  its season from `snapshot_date.year` (plain calendar year) — that's correct there,
+  because in January the ADP board anyone cares about is the *upcoming* draft season, not
+  the one that just ended. This asymmetry between the two sync paths is intentional; don't
+  "fix" it into consistency.
+
 ## 0.3.0 — 2026-08-07
 
 Kicker fantasy scoring. Unlike the DST gap 0.2.0 closed, this one was invisible rather

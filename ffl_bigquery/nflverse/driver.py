@@ -20,6 +20,26 @@ from ffl_bigquery.writer import BigQueryWriter, TableRef
 log = logging.getLogger(__name__)
 
 
+def nflverse_season_for_latest(now: datetime) -> int:
+    """Resolve the NFL season a `--seasons latest` nflverse sync should target.
+
+    NFL seasons are labeled by the year they START, not the calendar year, and
+    the season runs into the following January/February for the postseason. A
+    run in early January is still fetching the PRIOR season's postseason (e.g.
+    a 2027-01-15 run wants season 2026, whose Super Bowl hasn't been played
+    yet) -- so the rollover to the new season happens in September, when the
+    new season's Week 1 actually starts, not on the calendar new year.
+
+    This mirrors `nfl_bigquery.sync.current_season()` in the sibling library.
+    It is deliberately scoped to the nflverse driver only: `ffl_bigquery.adp.
+    sync` resolves its own season from `snapshot_date.year` (calendar year),
+    which is correct there because in January the interesting ADP board is
+    the *upcoming* draft season, not the one just finished. Don't "fix" that
+    asymmetry -- it's intentional.
+    """
+    return now.year if now.month >= 9 else now.year - 1
+
+
 def run_sync_nflverse(
     specs: list[NflverseTableSpec],
     *,
@@ -149,7 +169,10 @@ def run_sync_nflverse_cli(
     runs_table = ns.runs_table or f"{project}.{dataset}._ffl_nflverse_runs"
     runs_ref = TableRef.parse(runs_table)
 
-    season_for_latest = current_season or datetime.now(UTC).year
+    season_for_latest = (
+        current_season if current_season is not None
+        else nflverse_season_for_latest(datetime.now(UTC))
+    )
     seasons = parse_seasons(ns.seasons, season_for_latest)
 
     writer = writer or BigQueryWriter(client=bq_client)
