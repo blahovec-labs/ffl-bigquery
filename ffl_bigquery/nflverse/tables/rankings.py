@@ -2,8 +2,10 @@
 
 Unlike every other table here this is NOT season-chunked -- the loader returns
 "as of now" with a scrape_date and no season column, so it is snapshot-grain
-like ff_adp: MERGE on (scrape_date, ecr_type, id) so re-running the same day is
-a no-op, and it becomes a time series only if captured repeatedly.
+like ff_adp: MERGE on (scrape_date, ecr_type, page_type, id) so re-running the same
+day is a no-op, and it becomes a time series only if captured repeatedly. page_type
+is in the key because FantasyPros ranks some players (edge rushers) on two position
+pages -- dynasty-DL and dynasty-LB -- with the same ecr_type and id.
 """
 from __future__ import annotations
 
@@ -16,14 +18,14 @@ from ffl_bigquery.schema import to_bq_schema
 from ffl_bigquery.schema_gen import specs_from_frame
 from ffl_bigquery.writer import BigQueryWriter, TableRef
 
-FF_RANKINGS_KEYS = ["scrape_date", "ecr_type", "id"]
+FF_RANKINGS_KEYS = ["scrape_date", "ecr_type", "page_type", "id"]
 FF_RANKINGS_PARTITION = TimePartition(
     field="scrape_date", clustering=["ecr_type", "pos"]
 )
 FF_RANKINGS_SCHEMA = specs_from_frame(
     read_sample("ff_rankings"), table="ff_rankings",
     type_overrides={"scrape_date": "DATE"},
-    required=("scrape_date", "ecr_type", "id"),
+    required=("scrape_date", "ecr_type", "page_type", "id"),
     enrichment={
         "ecr": {"semantic_tags": ["metric"],
                 "business_definition": "Expert consensus rank."},

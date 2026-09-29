@@ -62,8 +62,25 @@ def test_rankings_is_snapshot_grain_not_season_chunked():
         FF_RANKINGS_SCHEMA,
     )
 
-    assert FF_RANKINGS_KEYS == ["scrape_date", "ecr_type", "id"]
+    assert FF_RANKINGS_KEYS == ["scrape_date", "ecr_type", "page_type", "id"]
     assert FF_RANKINGS_PARTITION.field == "scrape_date"
     assert "season" not in spec_names(FF_RANKINGS_SCHEMA)
     for k in FF_RANKINGS_KEYS:
         assert next(s for s in FF_RANKINGS_SCHEMA if s.name == k).mode == "REQUIRED"
+
+
+def test_rankings_keys_keep_a_player_ranked_on_two_position_pages():
+    # FantasyPros ranks edge rushers on both the DL and LB pages: same
+    # (scrape_date, ecr_type, id), different page_type/ecr. Without page_type in
+    # the key the MERGE fails ("must match at most one source row"), which
+    # broke ffl-ingest's nflverse run 2026-09-26..29.
+    import pandas as pd
+
+    from ffl_bigquery.nflverse.tables.rankings import FF_RANKINGS_KEYS
+
+    df = pd.DataFrame({
+        "scrape_date": ["2026-09-25", "2026-09-25"], "ecr_type": ["dp", "dp"],
+        "id": [16469, 16469], "player": ["T.J. Watt", "T.J. Watt"],
+        "page_type": ["dynasty-dl", "dynasty-lb"], "ecr": [15.0, 6.0],
+    })
+    assert not df.duplicated(FF_RANKINGS_KEYS).any()

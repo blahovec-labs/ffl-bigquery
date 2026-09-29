@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.3.2 — 2026-09-29
+
+`ff_rankings` MERGE key now includes `page_type`: `(scrape_date, ecr_type, page_type, id)`.
+FantasyPros ranks some players on two position pages (edge rushers appear on both
+dynasty-DL and dynasty-LB) with the same `ecr_type` and `id` but a different rank, so the
+old key was not unique — every snapshot on record has 146–179 such pairs. A first capture
+of a snapshot inserted fine, but any re-run of the same snapshot failed with "UPDATE/MERGE
+must match at most one source row for each target row". `page_type` is never NULL
+upstream and is now REQUIRED in the schema spec.
+
 ## 0.3.1 — 2026-09-15
 
 Season rollover fix for `sync-nflverse --seasons latest`. `run_sync_nflverse_cli` was
