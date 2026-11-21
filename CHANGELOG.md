@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.3.4 — 2026-11-21
+
+A shrink guard on every replace. Atomic writes stop a failed load from wiping data, but not a load that succeeds with a short frame (an upstream outage that returns half the slice, or nothing). Before swapping, the writer now counts the rows already in the slice and raises `ShrinkGuardError`, deleting nothing, if the new frame is under 50% of them. Slices under 100 rows are exempt. Set `BIGQUERY_ALLOW_SHRINK=1` for a run where the source really did shrink. Every replace also logs `existing -> incoming` row counts. This changes `write_season`'s empty-season contract: an empty season over 100+ existing rows is now refused instead of cleared; use the override if a season really went to zero upstream.
+
 ## 0.3.3 — 2026-11-21
 
 Season writes are now atomic. `BigQueryWriter.write_season` ran
