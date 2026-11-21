@@ -11,6 +11,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from ffl_bigquery._atomic import ShrinkGuardError
 from ffl_bigquery.nflverse.runs import NflverseChunk, NflverseRunsTable
 from ffl_bigquery.nflverse.spec import NflverseTableSpec
 from ffl_bigquery.runs import parse_seasons
@@ -67,7 +68,7 @@ def run_sync_nflverse(
         )
 
     done = runs.completed_chunks(ref=runs_ref) if resume else set()
-    succeeded = failed = runlog_failures = dropped_total = 0
+    succeeded = failed = runlog_failures = dropped_total = shrink_refused = 0
 
     for spec in specs:
         for season in seasons:
@@ -97,6 +98,8 @@ def run_sync_nflverse(
                 succeeded += 1
             except Exception as e:  # noqa: BLE001 - one bad chunk must not abort the run
                 log.exception("chunk %s failed", chunk.key)
+                if isinstance(e, ShrinkGuardError):
+                    shrink_refused += 1
                 if not runs.record_failed(ref=runs_ref, chunk=chunk, error=str(e)):
                     runlog_failures += 1
                 failed += 1
@@ -107,6 +110,13 @@ def run_sync_nflverse(
         "%d row(s) dropped by the season guard",
         succeeded, failed, runlog_failures, dropped_total,
     )
+    if shrink_refused:
+        # Ordinary failures are often chronic (nflreadpy's season cap on
+        # participation), so they only fail the run when nothing succeeded. A
+        # refused shrink means good data was about to be replaced by far less:
+        # always fail the run so it alerts.
+        log.error("%d chunk(s) refused by the shrink guard", shrink_refused)
+        return 1
     return 1 if succeeded == 0 and failed > 0 else 0
 
 

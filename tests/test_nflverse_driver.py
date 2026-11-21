@@ -89,6 +89,23 @@ def test_one_failing_table_does_not_stop_the_others():
     assert r.record_success.call_count == 1
 
 
+def test_a_shrink_guard_refusal_returns_nonzero_even_when_others_succeed():
+    # Ordinary chunk failures (e.g. nflreadpy's season cap on participation) are
+    # chronic and must not make every daily run fail. A shrink-guard refusal is
+    # different: good data was about to be replaced by far less, and someone
+    # needs to look. The other chunks still run.
+    from ffl_bigquery._atomic import ShrinkGuardError
+
+    w, r = MagicMock(), MagicMock()
+    w.write_season.side_effect = [ShrinkGuardError("p.d.a", "season = @season", 1000, 10), 1]
+    r.completed_chunks.return_value = set()
+    rc = run_sync_nflverse([_table("a"), _table("b")], seasons=[2026], writer=w, runs=r,
+                           runs_ref=TableRef.parse("p.d.runs"), table_refs=_refs("a", "b"))
+    assert rc == 1
+    assert r.record_failed.call_count == 1
+    assert r.record_success.call_count == 1
+
+
 def test_all_failing_returns_nonzero():
     def _boom(season: int) -> pd.DataFrame:
         raise RuntimeError("down")

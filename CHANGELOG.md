@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.3.5 — 2026-11-21
+
+`sync-nflverse` now exits 1 when any chunk is refused by the shrink guard (0.3.4), even if
+other chunks succeeded; the remaining chunks still run. Before, it exited non-zero only when
+every chunk failed, so a refusal would have been visible only in `_ffl_nflverse_runs`.
+Ordinary chunk failures keep the old rule, because some are chronic (`participation` and
+`team_scheme_week` fail daily on nflreadpy's 2025 season cap) and must not fail every run.
+
 ## 0.3.4 — 2026-11-21
 
 A shrink guard on every replace. Atomic writes stop a failed load from wiping data, but not a load that succeeds with a short frame (an upstream outage that returns half the slice, or nothing). Before swapping, the writer now counts the rows already in the slice and raises `ShrinkGuardError`, deleting nothing, if the new frame is under 50% of them. Slices under 100 rows are exempt. Set `BIGQUERY_ALLOW_SHRINK=1` for a run where the source really did shrink. Every replace also logs `existing -> incoming` row counts. This changes `write_season`'s empty-season contract: an empty season over 100+ existing rows is now refused instead of cleared; use the override if a season really went to zero upstream.
