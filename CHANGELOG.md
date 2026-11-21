@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.3.3 — 2026-11-21
+
+Season writes are now atomic. `BigQueryWriter.write_season` ran
+`DELETE ... WHERE season = @season` as its own query and then a separate load job. A
+BigQuery load job can't join a transaction, so those were two commits: if the load
+failed, the season's rows were already gone and stayed gone until the next successful
+run. That is the failure that wiped 2026-06-02 from statcast-bigquery. It hit every
+season-chunked nflverse table here, and each write replaces a whole season.
+
+### Fixed
+
+- `write_season` loads into a short-lived `_staging_*` table first (6-hour expiry as a
+  backstop), then runs `DELETE` + `INSERT ... SELECT` in one multi-statement
+  transaction, then drops the staging table (`ffl_bigquery/_atomic.py`). A failed load
+  no longer deletes anything; a failed swap rolls back. An empty season is still a
+  DELETE-only write, now inside a transaction. Idempotency is unchanged: re-running a
+  season still replaces it wholesale.
+- `merge_rows` (ADP, xref, rankings, coordinators) was already safe: a single `MERGE`
+  statement.
+
 ## 0.3.2 — 2026-09-29
 
 `ff_rankings` MERGE key now includes `page_type`: `(scrape_date, ecr_type, page_type, id)`.

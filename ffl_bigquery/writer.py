@@ -14,6 +14,7 @@ import pandas as pd
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 
+from ffl_bigquery._atomic import atomic_replace
 from ffl_bigquery.partition import ClusterOnly, SeasonRangePartition, TimePartition
 from ffl_bigquery.schema import ColumnSpec, to_bq_schema
 
@@ -195,7 +196,7 @@ class BigQueryWriter:
         season: int,
         schema: list[ColumnSpec],
     ) -> WriteSeasonResult:
-        """DELETE rows for `season`, then append `df`. Returns a
+        """Replace the rows for `season` with `df`, atomically. Returns a
         `WriteSeasonResult` (an int of rows actually written, plus `.dropped`).
 
         The DELETE runs even when df is empty: a season that legitimately goes
@@ -224,15 +225,9 @@ class BigQueryWriter:
         passed through unchanged -- some callers legitimately have none.
         """
         bq_schema = to_bq_schema(schema)
-        self.client.query(
-            f"DELETE FROM `{ref}` WHERE season = @season",
-            job_config=bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("season", "INT64", season)
-                ],
-            ),
-        ).result()
+        params = [bigquery.ScalarQueryParameter("season", "INT64", season)]
         if df.empty:
+            atomic_replace(self.client, str(ref), df, bq_schema, "season = @season", params)
             log.info("season %s of %s is empty; deleted only", season, ref)
             return WriteSeasonResult(0, 0)
 
@@ -255,17 +250,13 @@ class BigQueryWriter:
                 df = df.loc[~(is_null | is_mismatched)]
 
         if df.empty:
+            atomic_replace(self.client, str(ref), df, bq_schema, "season = @season", params)
             log.info(
                 "season %s of %s: all rows dropped by season guard", season, ref,
             )
             return WriteSeasonResult(0, dropped)
-        self.client.load_table_from_dataframe(
-            df,
-            str(ref),
-            job_config=bigquery.LoadJobConfig(
-                write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-                schema=bq_schema,
-            ),
-        ).result()
+        # Stage, then DELETE + INSERT in one transaction: a failed load leaves the
+        # season's existing rows untouched instead of deleted (see _atomic.py).
+        atomic_replace(self.client, str(ref), df, bq_schema, "season = @season", params)
         log.info("wrote %d rows to %s season=%s", len(df), ref, season)
         return WriteSeasonResult(len(df), dropped)
